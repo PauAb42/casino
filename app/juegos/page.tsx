@@ -1,5 +1,8 @@
-import Link from "next/link";
+"use client";
+
+import { useRouter } from "next/navigation";
 import { ShieldAlert } from "lucide-react";
+import { useAuthStore } from "@/lib/authStore";
 
 // Lista oficial de juegos basada en el recorrido del casino
 const GAMES = [
@@ -48,6 +51,18 @@ const GAMES = [
 ];
 
 export default function JuegosPage() {
+  const router = useRouter();
+  const { user } = useAuthStore();
+
+  // El "cadenero" de los clics
+  const handleGameAction = (slug: string) => {
+    if (!user) {
+      router.push("/login");
+    } else {
+      router.push(`/juegos/${slug}`);
+    }
+  };
+
   return (
     <div className="min-h-[calc(100vh-5rem)] max-w-[1600px] mx-auto pb-12 px-4 sm:px-6 lg:px-8">
       
@@ -69,10 +84,10 @@ export default function JuegosPage() {
       {/* Cuadrícula de Juegos */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
         {GAMES.map((game) => (
-          <Link
+          <div
             key={game.slug}
-            href={`/juegos/${game.slug}`}
-            className="group relative block rounded-3xl overflow-hidden bg-[#0B0E14] border border-white/5 hover:border-[#D4AF37]/50 transition-all duration-300 shadow-lg hover:shadow-[0_0_30px_rgba(212,175,55,0.15)] h-64 sm:h-72"
+            onClick={() => handleGameAction(game.slug)}
+            className="cursor-pointer group relative block rounded-3xl overflow-hidden bg-[#0B0E14] border border-white/5 hover:border-[#D4AF37]/50 transition-all duration-300 shadow-lg hover:shadow-[0_0_30px_rgba(212,175,55,0.15)] h-64 sm:h-72"
           >
             {/* Imagen de Fondo con Zoom */}
             <div 
@@ -103,7 +118,7 @@ export default function JuegosPage() {
                 </span>
               </div>
             </div>
-          </Link>
+          </div>
         ))}
       </div>
       

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Play, ShieldAlert, Maximize2, Settings } from "lucide-react";
+import { useAuthStore } from "@/lib/authStore";
 
 // Mapeo temporal para darle formato bonito al título dependiendo de la URL
 const GAME_DETAILS: Record<string, { nombre: string; permiso: string; color: string }> = {
@@ -18,21 +19,32 @@ const GAME_DETAILS: Record<string, { nombre: string; permiso: string; color: str
 export default function GameRoom() {
   const params = useParams();
   const router = useRouter();
+  const { user } = useAuthStore();
   const slug = params.slug as string;
   
   const [isPlaying, setIsPlaying] = useState(false);
+
+  // CADENERO DE SEGURIDAD ABSOLUTA
+  useEffect(() => {
+    if (!user) {
+      router.replace("/login"); // Si no hay usuario, lo expulsa de inmediato
+    }
+  }, [user, router]);
+
+  // Si no hay usuario, retornamos pantalla oscura en lo que lo redirige para que no vea la sala
+  if (!user) return <div className="h-[calc(100vh-5rem)] bg-[#05050A]"></div>;
 
   // Obtener los detalles del juego actual, si no existe ponemos valores por defecto
   const gameInfo = GAME_DETAILS[slug] || { nombre: "Mesa Privada", permiso: "Verificando...", color: "text-[#D4AF37]" };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-5rem)] max-w-[1600px] mx-auto pb-6">
+    <div className="flex flex-col h-[calc(100vh-5rem)] max-w-[1600px] mx-auto pb-6 px-4 sm:px-6">
       
       {/* Barra superior de la sala */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 mt-4">
         <div className="flex items-center gap-4">
           <button 
-            onClick={() => router.push("/")}
+            onClick={() => router.push("/juegos")}
             className="flex items-center justify-center w-10 h-10 rounded-full bg-[#131722] border border-white/5 hover:bg-[#1E1133] hover:border-[#8A2BE2]/50 text-gray-400 hover:text-white transition-all"
           >
             <ArrowLeft size={20} />
@@ -49,10 +61,10 @@ export default function GameRoom() {
         </div>
 
         <div className="flex items-center gap-3">
-          <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#131722] border border-white/5 text-gray-400 hover:text-white transition-colors text-sm font-medium">
+          <button className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-lg bg-[#131722] border border-white/5 text-gray-400 hover:text-white transition-colors text-sm font-medium">
             <Settings size={16} /> Configuración
           </button>
-          <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#131722] border border-white/5 text-gray-400 hover:text-white transition-colors text-sm font-medium">
+          <button className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-lg bg-[#131722] border border-white/5 text-gray-400 hover:text-white transition-colors text-sm font-medium">
             <Maximize2 size={16} /> Pantalla Completa
           </button>
         </div>
@@ -62,7 +74,7 @@ export default function GameRoom() {
       <div className="flex-1 bg-[#05050A] border border-white/5 rounded-3xl overflow-hidden relative shadow-2xl flex flex-col items-center justify-center">
         
         {/* Fondo decorativo del lienzo */}
-        <div className="absolute inset-0 bg-[url('/images/bg-casino.jpg')] bg-cover bg-center opacity-10 pointer-events-none"></div>
+        <div className="absolute inset-0 bg-cover bg-center opacity-10 pointer-events-none" style={{ backgroundImage: "url('/images/bg-casino.jpg')" }}></div>
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[#05050A]/80 to-[#05050A] pointer-events-none"></div>
 
         {!isPlaying ? (
@@ -71,7 +83,7 @@ export default function GameRoom() {
               <Play size={40} className="text-[#D4AF37] ml-2" />
             </div>
             <h2 className="text-3xl font-bold text-white mb-3 text-center">Mesa lista para jugar</h2>
-            <p className="text-gray-400 text-sm mb-8 text-center max-w-md leading-relaxed">
+            <p className="text-gray-400 text-sm mb-8 text-center max-w-md leading-relaxed px-4">
               Estás a punto de ingresar a la zona de <span className="text-white">{gameInfo.nombre}</span>. Al iniciar la partida, se aplicarán las reglas de la sala.
             </p>
             <button 
