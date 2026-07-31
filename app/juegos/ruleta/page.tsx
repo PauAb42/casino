@@ -6,16 +6,17 @@ import {
   ChevronLeft,
   Star,
   Maximize,
-  Plus, // <-- Cambiado de ChevronDown a Plus
+  Plus, 
   Send,
   RotateCcw,
   XCircle,
   Play,
   Copy,
   Users,
+  Bell, 
 } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
-import { useBalanceStore } from "@/lib/balanceStore"; // <-- Sincronización con el Sidebar
+import { useBalanceStore } from "@/lib/balanceStore"; 
 
 const RED_NUMBERS = [
   1, 3, 5, 7, 9, 12, 14, 16, 18,
@@ -80,105 +81,52 @@ const CHIPS = [
   { value: 10000, label: "10K", color: "bg-yellow-600 border-yellow-400 text-black" },
 ];
 
-type BetKind =
-  | "number"
-  | "dozen"
-  | "column"
-  | "low"
-  | "high"
-  | "even"
-  | "odd"
-  | "red"
-  | "black";
+type BetKind = "number" | "dozen" | "column" | "low" | "high" | "even" | "odd" | "red" | "black";
+type BetDraft = { key: string; label: string; kind: BetKind; value?: number; };
+type Bet = BetDraft & { amount: number; };
+type BetAction = { placements: Array<{ key: string; amount: number }>; };
+type ChatMessage = { id: number; user: string; text: string; isDealer: boolean; };
 
-type BetDraft = {
-  key: string;
-  label: string;
-  kind: BetKind;
-  value?: number;
-};
+const currency = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: 2 });
 
-type Bet = BetDraft & {
-  amount: number;
-};
-
-type BetAction = {
-  placements: Array<{ key: string; amount: number }>;
-};
-
-type ChatMessage = {
-  id: number;
-  user: string;
-  text: string;
-  isDealer: boolean;
-};
-
-const currency = new Intl.NumberFormat("es-MX", {
-  style: "currency",
-  currency: "MXN",
-  minimumFractionDigits: 2,
-});
-
-function normalizeAngle(angle: number) {
-  return ((angle % 360) + 360) % 360;
-}
-
-function roundMoney(value: number) {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
-}
-
+function normalizeAngle(angle: number) { return ((angle % 360) + 360) % 360; }
+function roundMoney(value: number) { return Math.round((value + Number.EPSILON) * 100) / 100; }
 function secureRouletteNumber(): number {
   const range = 2 ** 32;
   const limit = Math.floor(range / 37) * 37;
   const values = new Uint32Array(1);
-
-  do {
-    window.crypto.getRandomValues(values);
-  } while (values[0] >= limit);
-
+  do { window.crypto.getRandomValues(values); } while (values[0] >= limit);
   return values[0] % 37;
 }
 
-function isRed(number: number) {
-  return RED_NUMBERS.includes(number);
-}
+function isRed(number: number) { return RED_NUMBERS.includes(number); }
 
 function payoutForBet(bet: Bet, result: number): number {
   switch (bet.kind) {
-    case "number":
-      return result === bet.value ? bet.amount * 36 : 0;
-    case "red":
-      return result !== 0 && isRed(result) ? bet.amount * 2 : 0;
-    case "black":
-      return result !== 0 && !isRed(result) ? bet.amount * 2 : 0;
-    case "even":
-      return result !== 0 && result % 2 === 0 ? bet.amount * 2 : 0;
-    case "odd":
-      return result !== 0 && result % 2 !== 0 ? bet.amount * 2 : 0;
-    case "low":
-      return result >= 1 && result <= 18 ? bet.amount * 2 : 0;
-    case "high":
-      return result >= 19 && result <= 36 ? bet.amount * 2 : 0;
-    case "dozen":
-      return result !== 0 && Math.ceil(result / 12) === bet.value
-        ? bet.amount * 3
-        : 0;
+    case "number": return result === bet.value ? bet.amount * 36 : 0;
+    case "red": return result !== 0 && isRed(result) ? bet.amount * 2 : 0;
+    case "black": return result !== 0 && !isRed(result) ? bet.amount * 2 : 0;
+    case "even": return result !== 0 && result % 2 === 0 ? bet.amount * 2 : 0;
+    case "odd": return result !== 0 && result % 2 !== 0 ? bet.amount * 2 : 0;
+    case "low": return result >= 1 && result <= 18 ? bet.amount * 2 : 0;
+    case "high": return result >= 19 && result <= 36 ? bet.amount * 2 : 0;
+    case "dozen": return result !== 0 && Math.ceil(result / 12) === bet.value ? bet.amount * 3 : 0;
     case "column": {
       if (result === 0 || bet.value === undefined) return 0;
       const expectedRemainder = bet.value === 3 ? 0 : bet.value;
       return result % 3 === expectedRemainder ? bet.amount * 3 : 0;
     }
-    default:
-      return 0;
+    default: return 0;
   }
 }
 
 export default function RuletaPage() {
   const router = useRouter();
   const { user } = useAuthStore();
-  
-  // Usamos el Store Global de Saldo
-  const { balance, setBalance } = useBalanceStore();
+  const { balance, setBalance } = useBalanceStore(); 
+
+  // ESTADO DE PERMISO DE NOTIFICACIONES
+  const [hasNotificationPermission, setHasNotificationPermission] = useState(false);
 
   const resultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -198,16 +146,46 @@ export default function RuletaPage() {
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(INITIAL_CHAT_MESSAGES);
 
-  // EFECTO CADENERO: Bloquea si no hay sesión
+  // Verificación de Autenticación
   useEffect(() => {
-    if (!user) {
-      router.replace("/login");
-    }
+    if (!user) router.replace("/login");
   }, [user, router]);
 
-  // Resto de efectos para chat e historial
+  // Verificación Inicial del Permiso de Notificaciones
   useEffect(() => {
-    if (!user) return; // Evita ejecutar lógicas si será redirigido
+    if (typeof window !== "undefined" && "Notification" in window) {
+      if (Notification.permission === "granted") {
+        setHasNotificationPermission(true);
+      }
+    }
+  }, []);
+
+  // Función Real para Pedir Permiso
+  const requestNotificationPermission = async () => {
+    if (!("Notification" in window)) {
+      alert("Tu navegador no soporta notificaciones.");
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission === "granted") {
+        setHasNotificationPermission(true);
+        new Notification("¡Mesa Desbloqueada!", {
+          body: "Bienvenido a la Ruleta Europea de Royal Casino. ¡Buena suerte!",
+          icon: "/ruleta.png",
+        });
+      } else {
+        alert("Debes permitir las notificaciones para poder ingresar a esta mesa VIP.");
+      }
+    } catch (error) {
+      console.error("Error al solicitar permiso de notificaciones:", error);
+    }
+  };
+
+  // Resto de efectos para chat e historial (solo corren si tiene permisos y sesión)
+  useEffect(() => {
+    if (!user || !hasNotificationPermission) return; 
     
     const savedTotalWagered = Number(window.localStorage.getItem("rouletteTotalWagered") ?? "0");
     const savedRoundsPlayed = Number(window.localStorage.getItem("rouletteRoundsPlayed") ?? "0");
@@ -233,15 +211,10 @@ export default function RuletaPage() {
       if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
       if (chatTimerRef.current) clearTimeout(chatTimerRef.current);
     };
-  }, [user]);
+  }, [user, hasNotificationPermission]);
 
-  useEffect(() => {
-    window.localStorage.setItem("rouletteTotalWagered", String(totalWagered));
-  }, [totalWagered]);
-
-  useEffect(() => {
-    window.localStorage.setItem("rouletteRoundsPlayed", String(roundsPlayed));
-  }, [roundsPlayed]);
+  useEffect(() => { window.localStorage.setItem("rouletteTotalWagered", String(totalWagered)); }, [totalWagered]);
+  useEffect(() => { window.localStorage.setItem("rouletteRoundsPlayed", String(roundsPlayed)); }, [roundsPlayed]);
 
   const currentBets = useMemo(() => Object.values(bets), [bets]);
   const totalBet = useMemo(() => currentBets.reduce((sum, bet) => sum + bet.amount, 0), [currentBets]);
@@ -330,17 +303,16 @@ export default function RuletaPage() {
     const result = secureRouletteNumber();
     const resultIndex = ROULETTE_ORDER.indexOf(result);
     
-    // MATEMÁTICA FÍSICA PARA COINCIDIR RUEDA Y BOLITA EXACTAMENTE
-    const extraSpins = 5; // Vueltas que dará la ruleta
+    const extraSpins = 5; 
     const newWheelRotation = wheelRotation + (360 * extraSpins);
-    const targetAngle = resultIndex * (360 / 37); // Dónde está la casilla ganadora
+    const targetAngle = resultIndex * (360 / 37); 
     const finalAbsoluteAngle = newWheelRotation + targetAngle;
     
     const currentBallMod = ballRotation % 360;
     const targetMod = finalAbsoluteAngle % 360;
     let diff = targetMod - currentBallMod;
-    if (diff > 0) diff -= 360; // Forzamos a la bolita a girar hacia atrás
-    const newBallRotation = ballRotation - (360 * 6) + diff; // Bolita gira en contra
+    if (diff > 0) diff -= 360; 
+    const newBallRotation = ballRotation - (360 * 6) + diff; 
 
     const betsSnapshot = currentBets.map((bet) => ({ ...bet }));
     const stakeSnapshot = totalBet;
@@ -431,11 +403,39 @@ export default function RuletaPage() {
     </button>
   );
 
-  // Si no hay usuario, retornamos fondo negro en lo que bloquea
   if (!user) return <div className="h-screen bg-[#05050A]"></div>;
 
   return (
-    <div className="flex flex-col min-h-screen bg-[#05050A] text-white font-sans">
+    <div className="relative flex flex-col min-h-screen bg-[#05050A] text-white font-sans">
+      
+      {/* CAPA DE BLOQUEO DE PERMISOS (FIJADA A LA PANTALLA) */}
+      {!hasNotificationPermission && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#05050A]/85 backdrop-blur-md">
+          <div className="bg-[#0B0E14] border border-[#8A2BE2]/50 p-8 rounded-3xl shadow-[0_0_50px_rgba(138,43,226,0.2)] flex flex-col items-center max-w-md text-center mx-4 animate-in zoom-in-95 duration-300">
+            <div className="w-20 h-20 bg-[#1E1133] rounded-full flex items-center justify-center mb-6 border border-[#8A2BE2]/30 shadow-[0_0_30px_rgba(138,43,226,0.3)]">
+              <Bell className="text-[#D4AF37]" size={36} />
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-3">Permiso Requerido</h2>
+            <p className="text-gray-400 text-sm mb-8 leading-relaxed">
+              Para garantizar la seguridad de tus apuestas y notificarte sobre giros o premios especiales, la mesa de Ruleta requiere acceso a tus notificaciones del sistema.
+            </p>
+            <button
+              onClick={requestNotificationPermission}
+              className="bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-bold py-3.5 px-8 rounded-xl transition-all shadow-[0_4px_15px_rgba(212,175,55,0.2)] hover:shadow-[0_6px_20px_rgba(212,175,55,0.3)] w-full tracking-widest uppercase text-sm"
+            >
+              PERMITIR Y ENTRAR
+            </button>
+            <button
+              onClick={() => router.push("/juegos")}
+              className="mt-6 text-gray-500 hover:text-white text-xs font-bold uppercase tracking-widest transition-colors"
+            >
+              VOLVER AL LOBBY
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* JUEGO REAL */}
       <header className="h-16 border-b border-white/5 flex items-center justify-between px-4 lg:px-6 shrink-0 bg-[#0B0E14]">
         <div className="flex items-center gap-4">
           <button
@@ -528,16 +528,13 @@ export default function RuletaPage() {
         </aside>
 
         <main className="flex-1 flex flex-col gap-4 min-w-0">
-          
-          {/* DIVIDIMOS LA SECCIÓN: Ruleta arriba enorme, Status abajo separado */}
           <section className="flex flex-col gap-4">
-            
-            {/* Contenedor de Ruleta Limpio */}
             <div className="min-h-[500px] xl:min-h-[620px] bg-[radial-gradient(circle_at_center,#21112f_0%,#0b0e14_55%,#05050a_100%)] border border-white/5 rounded-xl shadow-lg relative flex items-center justify-center overflow-hidden p-6 sm:p-8">
               <div className="absolute inset-0 opacity-40 bg-[radial-gradient(circle_at_50%_20%,rgba(138,43,226,0.35),transparent_45%)]" />
 
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center">
                 <div className="w-0 h-0 border-l-[11px] border-r-[11px] border-t-[18px] border-l-transparent border-r-transparent border-t-[#D4AF37] drop-shadow-[0_0_8px_rgba(212,175,55,0.8)]" />
+                <span className="mt-1 text-[9px] uppercase tracking-[0.22em] text-[#D4AF37]">Número ganador</span>
               </div>
 
               <div className="relative w-[360px] h-[360px] sm:w-[460px] sm:h-[460px] lg:w-[540px] lg:h-[540px] xl:w-[590px] xl:h-[590px]">
@@ -553,7 +550,6 @@ export default function RuletaPage() {
 
                     return (
                       <div key={number} className="absolute inset-0 pointer-events-none" style={{ transform: `rotate(${angle}deg)` }}>
-                        {/* Corrección: Quitado el counter-rotate. Ahora los números apuntan al centro */}
                         <span
                           className={`absolute left-1/2 top-[2.6%] w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-[9px] sm:text-[10px] font-black border ${
                             number === 0 ? "bg-green-700" : isRed(number) ? "bg-red-700" : "bg-black"
@@ -582,7 +578,6 @@ export default function RuletaPage() {
               </div>
             </div>
             
-            {/* Contenedor de Estado de la Ronda extraído para no tapar */}
             <div className="bg-[#0B0E14] border border-white/5 rounded-xl shadow-lg p-4 flex flex-row items-center justify-between gap-4">
               <div>
                 <p className="text-[10px] text-gray-400 uppercase tracking-[0.2em]">Estado de la ronda</p>
