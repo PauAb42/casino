@@ -7,10 +7,20 @@ import {
   History, MessageSquare, HeadphonesIcon, ShieldAlert, LogOut 
 } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
+import { useBalanceStore } from "@/lib/balanceStore"; // <-- Importamos el Store Global
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
+  
+  // Extraemos el saldo global
+  const { balance } = useBalanceStore();
+
+  // Formateador de moneda
+  const formattedBalance = new Intl.NumberFormat("es-MX", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(balance);
 
   // Ocultar el Sidebar en las pantallas de autenticación o la sala dinámica
   if (pathname === "/login" || pathname === "/registro" || pathname === "/recuperar" || pathname.startsWith("/juegos/")) {
@@ -40,7 +50,7 @@ export default function Sidebar() {
           <>
             <p className="text-[10px] text-gray-400 font-bold tracking-widest uppercase mb-1">Saldo Principal</p>
             <p className="text-2xl font-bold text-white mb-4 drop-shadow-md">
-              $ 12,450.75 <span className="text-xs text-gray-500 font-normal">MXN</span>
+              $ {formattedBalance} <span className="text-xs text-gray-500 font-normal">MXN</span>
             </p>
             <button className="w-full bg-[#3B2063] hover:bg-[#4A297C] text-white py-3 rounded-xl flex items-center justify-center gap-2 text-[11px] font-bold tracking-widest uppercase transition-colors shadow-lg">
               <span className="text-lg leading-none mb-0.5">+</span> DEPOSITAR
