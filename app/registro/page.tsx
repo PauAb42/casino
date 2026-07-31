@@ -3,13 +3,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Mail, Lock, Eye, EyeOff, ShieldCheck, Gift, Crown, User, Calendar, CheckCircle2 } from "lucide-react";
-import { fetchApi } from "@/lib/api";
+import { Mail, Lock, Eye, EyeOff, ShieldCheck, Gift, Crown, User, Calendar, CheckCircle2, X } from "lucide-react";
 
 export default function RegistroPage() {
   const router = useRouter();
   
-  // Únicos campos permitidos por la BD
+  // Estados de formulario
   const [alias, setAlias] = useState("");
   const [correo, setCorreo] = useState("");
   const [rangoEdad, setRangoEdad] = useState("");
@@ -18,54 +17,52 @@ export default function RegistroPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [aceptoTerminos, setAceptoTerminos] = useState(false);
   
+  // Estados de carga y éxito
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault(); // El navegador valida los campos "required" automáticamente antes de llegar aquí
+  // Estados para las ventanas emergentes (Modales)
+  const [modalConfig, setModalConfig] = useState<{ isOpen: boolean; type: "terminos" | "privacidad" | null }>({
+    isOpen: false,
+    type: null,
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
     if (!aceptoTerminos) return;
     
     setIsLoading(true);
     setError("");
 
-    try {
-      await fetchApi("/auth/registro", {
-        method: "POST",
-        body: JSON.stringify({
-          alias,
-          correo,
-          rango_edad: rangoEdad,
-          contrasena,
-        }),
-      });
+    // SIMULACIÓN DE REGISTRO (Sin Backend real)
+    setTimeout(() => {
+      setIsLoading(false);
+      
+      if (alias === "ErrorUser") {
+        setError("Este alias ya está en uso. Por favor, elige otro.");
+        return;
+      }
 
       setSuccess(true);
+      
       setTimeout(() => {
         router.push("/login");
       }, 2000);
-
-    } catch (err: any) {
-      setError(err.message || "Ocurrió un error al crear la cuenta.");
-    } finally {
-      setIsLoading(false);
-    }
+    }, 1500); 
   };
 
+  const closeModal = () => setModalConfig({ isOpen: false, type: null });
+
   return (
-    // CAMBIO CLAVE: 'fixed inset-0' y 'overflow-y-auto' evitan el margen del layout y habilitan scroll.
     <div className="fixed inset-0 z-40 overflow-y-auto bg-[#05050A] text-white">
       
-      {/* Fondo fijo detrás de todo, 100% limpio */}
       <div className="fixed inset-0 bg-[url('/fondo.png')] bg-cover bg-center opacity-30 pointer-events-none"></div>
       
-      {/* Contenedor flexible que estructura la página */}
       <div className="flex flex-col min-h-full">
         
-        {/* flex-1 centra la tarjeta verticalmente si hay espacio en pantalla */}
         <main className="relative z-10 flex-1 flex flex-col items-center justify-center w-full px-4 py-20">
           
-          {/* Contenedor Principal Ancho (Diseño intacto) */}
           <div className="bg-[#0B0E14]/95 backdrop-blur-xl border border-[#3B2063]/30 rounded-3xl shadow-[0_0_50px_rgba(59,32,99,0.15)] w-full max-w-[1000px] flex flex-col md:flex-row overflow-hidden">
             
             {/* Columna Izquierda: Información y Bono */}
@@ -75,9 +72,7 @@ export default function RegistroPage() {
                 <h1 className="text-3xl font-bold mb-2">Crea tu cuenta</h1>
                 <p className="text-gray-400 text-sm mb-8">Es rápido, seguro y gratis</p>
 
-                {/* Tarjeta de Bono */}
                 <div className="bg-[#130A24] border border-[#3B2063] rounded-2xl p-5 mb-8 flex items-center gap-4 relative overflow-hidden">
-                  {/* Glow de fondo */}
                   <div className="absolute -left-10 -top-10 w-32 h-32 bg-[#8A2BE2]/20 blur-3xl rounded-full"></div>
                   <div className="w-16 h-16 shrink-0 bg-gradient-to-br from-[#3B2063] to-[#1E1133] rounded-xl flex items-center justify-center border border-white/5 z-10">
                     <Gift size={32} className="text-[#8A2BE2]" />
@@ -90,7 +85,6 @@ export default function RegistroPage() {
                   </div>
                 </div>
 
-                {/* Beneficios */}
                 <div className="space-y-6">
                   <div className="flex gap-4">
                     <ShieldCheck size={24} className="text-[#8A2BE2] shrink-0 mt-0.5" />
@@ -238,7 +232,7 @@ export default function RegistroPage() {
                         required
                       />
                       <span className="text-xs text-gray-400 leading-relaxed group-hover:text-gray-300 transition-colors">
-                        Acepto los <Link href="/terminos" className="text-[#8A2BE2]">Términos y Condiciones</Link> y la <Link href="/privacidad" className="text-[#8A2BE2]">Política de Privacidad</Link> y confirmo que soy mayor de 18 años.
+                        Acepto los <button type="button" onClick={(e) => { e.preventDefault(); setModalConfig({ isOpen: true, type: "terminos" }); }} className="text-[#8A2BE2] hover:underline">Términos y Condiciones</button> y la <button type="button" onClick={(e) => { e.preventDefault(); setModalConfig({ isOpen: true, type: "privacidad" }); }} className="text-[#8A2BE2] hover:underline">Política de Privacidad</button> y confirmo que soy mayor de 18 años.
                       </span>
                     </label>
 
@@ -257,6 +251,100 @@ export default function RegistroPage() {
           </div>
         </main>
       </div>
+
+      {/* MODAL EMERGENTE PARA DOCUMENTOS LEGALES */}
+      {modalConfig.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#0F111A] border border-white/10 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            
+            {/* Cabecera del Modal */}
+            <div className="flex items-center justify-between p-6 border-b border-white/10">
+              <h2 className="text-xl font-bold text-white">
+                {modalConfig.type === "terminos" ? "Términos y Condiciones" : "Política de Privacidad"}
+              </h2>
+              <button onClick={closeModal} className="text-gray-400 hover:text-white transition-colors">
+                <X size={24} />
+              </button>
+            </div>
+
+            {/* Contenido del Modal (Scrollable) */}
+            <div className="p-6 overflow-y-auto text-sm text-gray-300 space-y-5 scrollbar-thin scrollbar-thumb-white/10">
+              {modalConfig.type === "terminos" ? (
+                <>
+                  <p><strong>1. Aceptación de los términos</strong><br/>Al acceder y utilizar los servicios de Royal Casino, usted acepta estar sujeto a estos términos y condiciones. Si no está de acuerdo con alguna parte, no debe utilizar nuestros servicios.</p>
+                  <p><strong>2. Elegibilidad</strong><br/>Debe tener al menos 18 años de edad para registrarse y jugar. Es su responsabilidad asegurarse de que el juego en línea sea legal en su jurisdicción.</p>
+                  <p><strong>3. Cuentas de usuario</strong><br/>Solo se permite una cuenta por persona. Royal Casino se reserva el derecho de suspender o cerrar cuentas duplicadas y confiscar los fondos asociados.</p>
+                  
+                  {/* SECCIÓN AÑADIDA: El recorrido y los permisos */}
+                  <div className="bg-[#1E1133]/30 border border-[#8A2BE2]/20 p-5 rounded-xl">
+                    <p className="mb-3 text-[#D4AF37] font-bold">4. Acceso a Zonas y Permisos del Sistema</p>
+                    <p className="mb-3">Para garantizar una experiencia inmersiva, funciones de seguridad KYC y verificar restricciones regionales, el recorrido por las zonas de nuestro casino requiere que el jugador otorgue ciertos permisos en su dispositivo:</p>
+                    
+                    <ul className="space-y-2">
+                      <li className="flex justify-between border-b border-white/5 pb-1">
+                        <span className="font-medium text-white">0. Lobby</span>
+                        <span className="text-gray-400">Requiere Cookies</span>
+                      </li>
+                      <li className="flex justify-between border-b border-white/5 pb-1">
+                        <span className="font-medium text-white">1. Tragamonedas</span>
+                        <span className="text-gray-400">Nada (acceso gratis)</span>
+                      </li>
+                      <li className="flex justify-between border-b border-white/5 pb-1">
+                        <span className="font-medium text-white">2. Ruleta</span>
+                        <span className="text-gray-400">Requiere Notificaciones</span>
+                      </li>
+                      <li className="flex justify-between border-b border-white/5 pb-1">
+                        <span className="font-medium text-white">3. Rasca y Gana</span>
+                        <span className="text-gray-400">Nada</span>
+                      </li>
+                      <li className="flex justify-between border-b border-white/5 pb-1">
+                        <span className="font-medium text-white">4. Blackjack VIP</span>
+                        <span className="text-gray-400">Requiere Ubicación</span>
+                      </li>
+                      <li className="flex justify-between border-b border-white/5 pb-1">
+                        <span className="font-medium text-white">5. Mesa en Vivo</span>
+                        <span className="text-gray-400">Requiere Micrófono</span>
+                      </li>
+                      <li className="flex justify-between border-b border-white/5 pb-1">
+                        <span className="font-medium text-white">6. Caja / Retiro</span>
+                        <span className="text-gray-400">Requiere Cámara</span>
+                      </li>
+                      <li className="flex justify-between pt-1">
+                        <span className="font-medium text-[#D4AF37]">7. Sala VIP</span>
+                        <span className="text-[#D4AF37]">(Los 5 anteriores)</span>
+                      </li>
+                    </ul>
+                    <p className="mt-3 text-xs text-gray-400">Al aceptar estos términos, usted comprende que el acceso a dichas zonas está estrictamente condicionado a la concesión de estos permisos de navegador o dispositivo.</p>
+                  </div>
+
+                  <p><strong>5. Juego Responsable</strong><br/>Ofrecemos herramientas para ayudar a controlar el juego, incluyendo límites de depósito y autoexclusión. Recomendamos jugar por diversión y nunca gastar más de lo que puede permitirse perder.</p>
+                </>
+              ) : (
+                <>
+                  <p><strong>1. Recopilación de información</strong><br/>Recopilamos información personal proporcionada durante el registro, como su alias, correo electrónico y rango de edad, así como datos técnicos relacionados con su dispositivo y uso del sitio.</p>
+                  
+                  <p><strong>2. Permisos y Datos del Dispositivo</strong><br/>Dependiendo de las áreas a las que acceda dentro de la plataforma, podremos solicitar y recopilar información en tiempo real a través de los permisos de su dispositivo, incluyendo, pero no limitándose a: <strong>ubicación geográfica, acceso al micrófono, cámara y notificaciones push.</strong> Esta información se utiliza exclusivamente para validar la seguridad de retiros en Caja, restricciones de mesas VIP y asegurar la integridad del juego.</p>
+                  
+                  <p><strong>3. Uso de la información</strong><br/>Utilizamos sus datos para gestionar su cuenta, procesar transacciones, asegurar la legalidad del acceso por región, mejorar nuestros servicios y enviarle comunicaciones promocionales (si ha dado su consentimiento).</p>
+                  <p><strong>4. Protección de datos</strong><br/>Implementamos medidas de seguridad técnicas y organizativas para proteger su información contra acceso no autorizado, alteración o divulgación.</p>
+                  <p><strong>5. Sus derechos</strong><br/>Usted tiene derecho a acceder, corregir o revocar los permisos otorgados en su dispositivo en cualquier momento mediante la configuración de su navegador, así como solicitar la eliminación de su cuenta a nuestro equipo de soporte.</p>
+                </>
+              )}
+            </div>
+
+            {/* Footer del Modal */}
+            <div className="p-6 border-t border-white/10 flex justify-end bg-[#0B0E14]">
+              <button 
+                onClick={closeModal}
+                className="bg-[#3B2063] hover:bg-[#4A297C] text-white px-6 py-2 rounded-lg transition-colors font-medium text-sm"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
