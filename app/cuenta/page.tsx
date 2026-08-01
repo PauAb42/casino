@@ -27,7 +27,7 @@ export default function CuentaPage() {
   const [formData, setFormData] = useState({
     nombre: "",
     alias: "",
-    email: "usuario@ejemplo.com",
+    email: "",
     telefono: "+52 55 1234 5678"
   });
 
@@ -43,7 +43,7 @@ export default function CuentaPage() {
       setFormData({
         nombre: user.participante?.nombre || "Jugador",
         alias: user.participante?.alias || "JugadorUno",
-        email: "usuario@ejemplo.com", // Simulado
+        email: "", // Simulado
         telefono: "+52 55 1234 5678" // Simulado
       });
     }
