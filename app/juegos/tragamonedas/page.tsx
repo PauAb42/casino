@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
 import { useBalanceStore } from "@/lib/balanceStore";
+import { useNotificationStore } from "@/lib/notificationStore"; // <-- Importación del Store de notificaciones
 
 // --- SÍMBOLOS REALISTAS (Con gradientes y contornos) ---
 const SYMBOLS = [
@@ -62,6 +63,7 @@ export default function TragamonedasPage() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { balance, setBalance } = useBalanceStore();
+  const { addNotification } = useNotificationStore(); // <-- Hook de notificaciones
 
   const [lines, setLines] = useState(25);
   const [betPerLine, setBetPerLine] = useState(4);
@@ -181,6 +183,9 @@ export default function TragamonedasPage() {
         setLastWin(winAmount);
         if (winAmount > highestWin) setHighestWin(winAmount);
         setStatusMessage(`¡GANASTE ${currency.format(winAmount)}!`);
+
+        // <-- Lógica Global de Notificaciones -->
+        addNotification(`¡Felicidades! Ganaste ${currency.format(winAmount)} en las Tragamonedas.`);
 
         if ("Notification" in window && Notification.permission === "granted") {
           new Notification("¡Premio en Tragamonedas!", {

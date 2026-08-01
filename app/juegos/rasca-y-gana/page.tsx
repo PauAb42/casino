@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
 import { useBalanceStore } from "@/lib/balanceStore";
+import { useNotificationStore } from "@/lib/notificationStore";
 
 // --- CONFIGURACIÓN DE LOS BOLETOS ---
 const TICKETS = [
@@ -43,6 +44,7 @@ export default function RascaYGanaPage() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { balance, setBalance } = useBalanceStore();
+  const { addNotification } = useNotificationStore(); // <-- Integración de notificaciones globales
 
   const [activeCategory, setActiveCategory] = useState("Todos");
   const [sortBy, setSortBy] = useState(SORT_OPTIONS[0]);
@@ -207,6 +209,11 @@ export default function RascaYGanaPage() {
 
       if (winAmount > 0) {
         setBalance((prev) => prev + winAmount);
+        
+        // <-- Llamada a la notificación global del Navbar -->
+        addNotification(`¡Felicidades! Ganaste ${currency.format(winAmount)} en el boleto ${activeTicket.name}.`);
+
+        // <-- Notificación nativa del sistema operativo -->
         if ("Notification" in window && Notification.permission === "granted") {
           new Notification("¡Premio Rasca y Gana!", {
             body: `Felicidades, ganaste ${currency.format(winAmount)} con el boleto ${activeTicket.name}.`,
@@ -238,7 +245,6 @@ export default function RascaYGanaPage() {
   if (!user) return <div className="h-screen bg-[#05050A]"></div>;
 
   return (
-    // CONTENEDOR MAESTRO
     <div className="h-screen w-full flex flex-col bg-[#08080C] text-white font-sans overflow-hidden">
       
       {/* HEADER ESTILO CASINO */}

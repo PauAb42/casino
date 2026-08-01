@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
 import { useBalanceStore } from "@/lib/balanceStore"; 
+import { useNotificationStore } from "@/lib/notificationStore";
 
 const RED_NUMBERS = [
   1, 3, 5, 7, 9, 12, 14, 16, 18,
@@ -89,7 +90,6 @@ type ChatMessage = { id: number; user: string; text: string; isDealer: boolean; 
 
 const currency = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: 2 });
 
-function normalizeAngle(angle: number) { return ((angle % 360) + 360) % 360; }
 function roundMoney(value: number) { return Math.round((value + Number.EPSILON) * 100) / 100; }
 function secureRouletteNumber(): number {
   const range = 2 ** 32;
@@ -124,13 +124,12 @@ export default function RuletaPage() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { balance, setBalance } = useBalanceStore(); 
+  const { addNotification } = useNotificationStore(); // <-- Notificaciones globales
 
   const [hasNotificationPermission, setHasNotificationPermission] = useState(false);
 
   const resultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
-  // Nueva referencia apuntando al contenedor directamente
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   const [selectedChip, setSelectedChip] = useState(50);
@@ -152,7 +151,6 @@ export default function RuletaPage() {
     if (!user) router.replace("/login");
   }, [user, router]);
 
-  // Nuevo Auto-scroll que NO afecta a toda la página
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTo({
@@ -350,6 +348,17 @@ export default function RuletaPage() {
 
       if (totalReturn > 0) {
         setStatusMessage(`Salió el ${result}. Premio: ${currency.format(totalReturn)}. Resultado neto: ${netResult >= 0 ? "+" : ""}${currency.format(netResult)}.`);
+        
+        // <-- Notificación en la campanita del Navbar -->
+        addNotification(`¡Felicidades! Ganaste ${currency.format(totalReturn)} en la Ruleta (Salió el ${result}).`);
+
+        // <-- Notificación nativa del sistema operativo -->
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification("¡Premio en Ruleta!", {
+            body: `¡Felicidades! Has ganado ${currency.format(totalReturn)} en la Ruleta.`,
+            icon: "/ruleta.png",
+          });
+        }
       } else {
         setStatusMessage(`Salió el ${result}. No hubo premio en esta ronda.`);
       }
@@ -507,7 +516,6 @@ export default function RuletaPage() {
               <h3 className="text-xs font-bold tracking-widest text-gray-400 uppercase">Chat</h3>
               <XCircle size={14} className="text-gray-500" />
             </div>
-            {/* Contenedor referenciado directamente sin usar scrollIntoView */}
             <div 
               ref={chatContainerRef} 
               className="flex-1 overflow-y-auto p-4 space-y-3 text-sm max-h-[300px]"
