@@ -1,15 +1,13 @@
-import { create } from "zustand";
+import { create } from 'zustand';
 
-interface BalanceStore {
+interface BalanceState {
   balance: number;
-  setBalance: (updater: number | ((prev: number) => number)) => void;
+  updateBalance: (amount: number) => void;
+  setBalance: (amount: number) => void;
 }
 
-export const useBalanceStore = create<BalanceStore>((set) => ({
-  balance: 12450.75, // Saldo inicial
-  
-  // Soportamos tanto setBalance(100) como setBalance((prev) => prev + 100)
-  setBalance: (updater) => set((state) => ({
-    balance: typeof updater === "function" ? updater(state.balance) : updater
-  })),
+export const useBalanceStore = create<BalanceState>((set) => ({
+  balance: 12450.75, // Saldo inicial de prueba
+  updateBalance: (amount) => set((state) => ({ balance: state.balance + amount })),
+  setBalance: (amount) => set({ balance: amount }),
 }));

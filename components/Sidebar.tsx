@@ -74,6 +74,7 @@ export default function Sidebar() {
               )}
 
               <button 
+                onClick={() => router.push("/cajero")}
                 className={`bg-[#3B2063] hover:bg-[#4A297C] text-white rounded-xl flex items-center justify-center font-bold tracking-widest uppercase transition-colors shadow-lg ${
                   isCollapsed ? "w-10 h-10 p-0" : "w-full py-3 gap-2 text-[11px]"
                 }`}
