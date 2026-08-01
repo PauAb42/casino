@@ -125,11 +125,13 @@ export default function RuletaPage() {
   const { user } = useAuthStore();
   const { balance, setBalance } = useBalanceStore(); 
 
-  // ESTADO DE PERMISO DE NOTIFICACIONES
   const [hasNotificationPermission, setHasNotificationPermission] = useState(false);
 
   const resultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Nueva referencia apuntando al contenedor directamente
+  const chatContainerRef = useRef<HTMLDivElement>(null);
 
   const [selectedChip, setSelectedChip] = useState(50);
   const [bets, setBets] = useState<Record<string, Bet>>({});
@@ -146,12 +148,20 @@ export default function RuletaPage() {
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(INITIAL_CHAT_MESSAGES);
 
-  // Verificación de Autenticación
   useEffect(() => {
     if (!user) router.replace("/login");
   }, [user, router]);
 
-  // Verificación Inicial del Permiso de Notificaciones
+  // Nuevo Auto-scroll que NO afecta a toda la página
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [chatMessages]);
+
   useEffect(() => {
     if (typeof window !== "undefined" && "Notification" in window) {
       if (Notification.permission === "granted") {
@@ -160,7 +170,6 @@ export default function RuletaPage() {
     }
   }, []);
 
-  // Función Real para Pedir Permiso
   const requestNotificationPermission = async () => {
     if (!("Notification" in window)) {
       alert("Tu navegador no soporta notificaciones.");
@@ -183,7 +192,6 @@ export default function RuletaPage() {
     }
   };
 
-  // Resto de efectos para chat e historial (solo corren si tiene permisos y sesión)
   useEffect(() => {
     if (!user || !hasNotificationPermission) return; 
     
@@ -198,7 +206,7 @@ export default function RuletaPage() {
       return window.setTimeout(() => {
         const message = SIMULATED_CHAT_MESSAGES[Math.floor(Math.random() * SIMULATED_CHAT_MESSAGES.length)];
         setChatMessages((previous) => [
-          ...previous.slice(-24),
+          ...previous.slice(-50), 
           { id: Date.now(), user: message.user, text: message.text, isDealer: Boolean(message.isDealer) },
         ]);
         chatTimerRef.current = scheduleMessage();
@@ -408,7 +416,6 @@ export default function RuletaPage() {
   return (
     <div className="relative flex flex-col min-h-screen bg-[#05050A] text-white font-sans">
       
-      {/* CAPA DE BLOQUEO DE PERMISOS (FIJADA A LA PANTALLA) */}
       {!hasNotificationPermission && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#05050A]/85 backdrop-blur-md">
           <div className="bg-[#0B0E14] border border-[#8A2BE2]/50 p-8 rounded-3xl shadow-[0_0_50px_rgba(138,43,226,0.2)] flex flex-col items-center max-w-md text-center mx-4 animate-in zoom-in-95 duration-300">
@@ -435,7 +442,6 @@ export default function RuletaPage() {
         </div>
       )}
 
-      {/* JUEGO REAL */}
       <header className="h-16 border-b border-white/5 flex items-center justify-between px-4 lg:px-6 shrink-0 bg-[#0B0E14]">
         <div className="flex items-center gap-4">
           <button
@@ -501,7 +507,11 @@ export default function RuletaPage() {
               <h3 className="text-xs font-bold tracking-widest text-gray-400 uppercase">Chat</h3>
               <XCircle size={14} className="text-gray-500" />
             </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 text-sm max-h-44 xl:max-h-none">
+            {/* Contenedor referenciado directamente sin usar scrollIntoView */}
+            <div 
+              ref={chatContainerRef} 
+              className="flex-1 overflow-y-auto p-4 space-y-3 text-sm max-h-[300px]"
+            >
               {chatMessages.map((message) => (
                 <div key={message.id} className="leading-tight">
                   <span className={`font-bold mr-2 ${message.isDealer ? "text-[#D4AF37]" : "text-[#8A2BE2]"}`}>{message.user}:</span>
@@ -534,7 +544,6 @@ export default function RuletaPage() {
 
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center">
                 <div className="w-0 h-0 border-l-[11px] border-r-[11px] border-t-[18px] border-l-transparent border-r-transparent border-t-[#D4AF37] drop-shadow-[0_0_8px_rgba(212,175,55,0.8)]" />
-                <span className="mt-1 text-[9px] uppercase tracking-[0.22em] text-[#D4AF37]">Número ganador</span>
               </div>
 
               <div className="relative w-[360px] h-[360px] sm:w-[460px] sm:h-[460px] lg:w-[540px] lg:h-[540px] xl:w-[590px] xl:h-[590px]">
