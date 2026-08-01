@@ -40,14 +40,7 @@ const GAMES = [
     descripcion: "Requiere Micrófono",
     imagenFondo: "/mesa-en-vivo.png",
     colorAcento: "bg-blue-500"
-  },
-  {
-    slug: "sala-vip",
-    nombre: "Sala VIP",
-    descripcion: "Requiere Acceso Total",
-    imagenFondo: "/sala-vip.png",
-    colorAcento: "bg-[#D4AF37]"
-  },
+  }
 ];
 
 export default function JuegosPage() {

@@ -25,8 +25,7 @@ const REAL_GAMES = [
   { id: "g2", slug: "ruleta", nombre: "Ruleta", descripcion: "Requiere Notificaciones", imagenFondo: "/ruleta.png" },
   { id: "g3", slug: "rasca-y-gana", nombre: "Rasca y Gana", descripcion: "Acceso libre", imagenFondo: "/rasca.png" },
   { id: "g4", slug: "blackjack-vip", nombre: "Blackjack VIP", descripcion: "Requiere Ubicación", imagenFondo: "/blackjack-vip.png" },
-  { id: "g5", slug: "mesa-en-vivo", nombre: "Mesa en Vivo", descripcion: "Requiere Micrófono", imagenFondo: "/mesa-en-vivo.png" },
-  { id: "g6", slug: "sala-vip", nombre: "Sala VIP", descripcion: "Acceso total privado", imagenFondo: "/sala-vip.png" },
+  { id: "g5", slug: "mesa-en-vivo", nombre: "Mesa en Vivo", descripcion: "Requiere Micrófono", imagenFondo: "/mesa-en-vivo.png" }
 ];
 
 export default function Home() {
@@ -169,7 +168,7 @@ export default function Home() {
         {isLoading ? (
           <div className="h-40 flex items-center justify-center text-gray-500 text-sm">Cargando mesas...</div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-5">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-5">
             {games.map((game) => (
               <div 
                 key={game.id} 
