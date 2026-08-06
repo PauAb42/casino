@@ -11,6 +11,10 @@ import {
 import { useAuthStore } from "@/lib/authStore";
 import { useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
+import { ApiError, api } from "@/lib/api";
+import type { RangoEdad } from "@/lib/api";
+
+const RANGOS_DE_EDAD: RangoEdad[] = ["18-24", "25-34", "35-44", "45-54", "55-64", "65+"];
 
 const currency = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: 2 });
 
@@ -22,14 +26,25 @@ export default function CuentaPage() {
 
   const [activeTab, setActiveTab] = useState<"perfil" | "seguridad" | "preferencias">("perfil");
   const [isEditing, setIsEditing] = useState(false);
-  
-  // Estados para simular el formulario de datos
+  const [guardando, setGuardando] = useState(false);
+  const [errorPerfil, setErrorPerfil] = useState<string | null>(null);
+
+  /**
+   * Lo que el backend guarda de verdad de un participante.
+   *
+   * `alias` y `rango_edad` son los dos únicos campos editables (`PATCH
+   * /usuarios/:id` exige al menos uno). No hay nombre ni teléfono: el estudio no
+   * los necesita, y el correo no se persiste en claro —solo su HMAC—, así que ni
+   * siquiera se puede mostrar de vuelta.
+   */
   const [formData, setFormData] = useState({
-    nombre: "",
     alias: "",
-    email: "",
-    telefono: "+52 55 1234 5678"
+    rango_edad: "" as RangoEdad | "",
   });
+
+  const [showAnonimizarModal, setShowAnonimizarModal] = useState(false);
+  const [anonimizando, setAnonimizando] = useState(false);
+  const [avisoAnonimizado, setAvisoAnonimizado] = useState<string | null>(null);
 
   // Estados para el Modal de Cambiar Contraseña
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -41,17 +56,54 @@ export default function CuentaPage() {
       router.replace("/login");
     } else {
       setFormData({
-        nombre: user.participante?.nombre || "Jugador",
-        alias: user.participante?.alias || "JugadorUno",
-        email: "", // Simulado
-        telefono: "+52 55 1234 5678" // Simulado
+        alias: user.participante.alias,
+        rango_edad: user.participante.rango_edad,
       });
     }
   }, [user, router]);
 
-  const handleSaveProfile = () => {
-    setIsEditing(false);
-    addNotification("¡Tu perfil ha sido actualizado exitosamente!");
+  const handleSaveProfile = async () => {
+    if (!user) return;
+    setGuardando(true);
+    setErrorPerfil(null);
+
+    try {
+      // Dueño o admin: la política la resuelve el caso de uso con el `:id`.
+      const { participante } = await api.usuarios.actualizar(user.participante.id, {
+        alias: formData.alias,
+        rango_edad: formData.rango_edad || undefined,
+      });
+
+      // Se refleja en el store para que el Navbar y el avatar cambien al vuelo.
+      useAuthStore.setState({
+        participante,
+        user: { participante, cuenta: user.cuenta },
+      });
+      setIsEditing(false);
+      addNotification("Tu perfil se actualizó en el laboratorio.");
+    } catch (error) {
+      setErrorPerfil(error instanceof ApiError ? error.message : "No se pudo actualizar el perfil");
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  const anonimizarCuenta = async () => {
+    if (!user) return;
+    setAnonimizando(true);
+    try {
+      // Responde 200 con el recurso resultante, no 204: el cliente tiene que
+      // poder ver el estado final y que la fila sigue ahí.
+      const respuesta = await api.usuarios.anonimizar(user.participante.id);
+      setShowAnonimizarModal(false);
+      setAvisoAnonimizado(respuesta.mensaje);
+      addNotification("Tu participación quedó anonimizada.");
+    } catch (error) {
+      setAvisoAnonimizado(error instanceof ApiError ? error.message : "No se pudo anonimizar la cuenta");
+      setShowAnonimizarModal(false);
+    } finally {
+      setAnonimizando(false);
+    }
   };
 
   if (!user) return <div className="min-h-screen bg-[#05050A]"></div>;
@@ -75,7 +127,9 @@ export default function CuentaPage() {
           
           <div className="text-center md:text-left flex-1">
             <h1 className="text-3xl md:text-4xl font-black mb-1">{formData.alias}</h1>
-            <p className="text-gray-400 mb-4">{formData.nombre} • Miembro desde 2024</p>
+            <p className="text-gray-400 mb-4">
+              <span className="font-mono text-xs">{user.participante.codigo_publico.slice(0, 8)}</span> • Miembro desde {new Date(user.participante.creado_at).getFullYear()}
+            </p>
             
             <div className="flex flex-wrap items-center justify-center md:justify-start gap-4">
               <div className="bg-[#131722] border border-white/5 px-4 py-2 rounded-lg flex items-center gap-3 shadow-inner">
@@ -157,66 +211,118 @@ export default function CuentaPage() {
                     <Edit2 size={14} /> <span className="hidden md:inline">Editar</span>
                   </button>
                 ) : (
-                  <button 
-                    onClick={handleSaveProfile}
-                    className="bg-gradient-to-r from-[#15803d] to-[#166534] hover:from-[#16a34a] hover:to-[#15803d] text-white border border-green-500 p-2 md:px-4 md:py-2 rounded-lg transition-colors flex items-center gap-2 text-xs font-bold uppercase tracking-widest shadow-[0_0_15px_rgba(21,128,61,0.3)]"
+                  <button
+                    onClick={() => void handleSaveProfile()}
+                    disabled={guardando}
+                    className="bg-gradient-to-r from-[#15803d] to-[#166534] hover:from-[#16a34a] hover:to-[#15803d] text-white border border-green-500 p-2 md:px-4 md:py-2 rounded-lg transition-colors flex items-center gap-2 text-xs font-bold uppercase tracking-widest shadow-[0_0_15px_rgba(21,128,61,0.3)] disabled:opacity-50"
                   >
-                    <Save size={14} /> <span className="hidden md:inline">Guardar</span>
+                    <Save size={14} /> <span className="hidden md:inline">{guardando ? "Guardando…" : "Guardar"}</span>
                   </button>
                 )}
               </div>
               
               <div className="p-6 lg:p-8 space-y-6">
+                {errorPerfil && (
+                  <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                    {errorPerfil}
+                  </p>
+                )}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Nombre Completo</label>
-                    <div className="relative">
-                      <User size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-                      <input 
-                        type="text" 
-                        disabled={!isEditing}
-                        value={formData.nombre}
-                        onChange={(e) => setFormData({...formData, nombre: e.target.value})}
-                        className="w-full bg-[#131722] border border-white/10 disabled:border-transparent disabled:opacity-70 rounded-xl py-3 pl-10 pr-4 text-sm text-white focus:outline-none focus:border-[#8A2BE2] transition-colors"
-                      />
-                    </div>
-                  </div>
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Alias de Juego</label>
                     <div className="relative">
                       <Gamepad2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-                      <input 
-                        type="text" 
+                      <input
+                        type="text"
                         disabled={!isEditing}
+                        minLength={3}
+                        maxLength={40}
                         value={formData.alias}
-                        onChange={(e) => setFormData({...formData, alias: e.target.value})}
+                        onChange={(e) => setFormData({ ...formData, alias: e.target.value })}
                         className="w-full bg-[#131722] border border-white/10 disabled:border-transparent disabled:opacity-70 rounded-xl py-3 pl-10 pr-4 text-sm text-white focus:outline-none focus:border-[#8A2BE2] transition-colors"
                       />
                     </div>
                   </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Rango de Edad</label>
+                    <div className="relative">
+                      <User size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                      <select
+                        disabled={!isEditing}
+                        value={formData.rango_edad}
+                        onChange={(e) => setFormData({ ...formData, rango_edad: e.target.value as RangoEdad })}
+                        className="w-full appearance-none bg-[#131722] border border-white/10 disabled:border-transparent disabled:opacity-70 rounded-xl py-3 pl-10 pr-4 text-sm text-white focus:outline-none focus:border-[#8A2BE2] transition-colors [&>option]:bg-[#131722]"
+                      >
+                        {RANGOS_DE_EDAD.map((rango) => (
+                          <option key={rango} value={rango}>
+                            {rango}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <p className="text-[10px] text-gray-500">El estudio agrupa por rango, nunca por fecha exacta.</p>
+                  </div>
+
+                  {/* Identificador público del participante: es el que aparece en
+                      los informes del estudio, disociado de la cuenta. */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Código Público</label>
+                    <div className="relative">
+                      <Shield size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                      <input
+                        type="text"
+                        disabled
+                        value={user.participante.codigo_publico}
+                        className="w-full bg-[#131722] border-transparent opacity-70 rounded-xl py-3 pl-10 pr-4 text-sm font-mono text-gray-400 cursor-not-allowed"
+                      />
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Correo Electrónico</label>
                     <div className="relative">
                       <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-                      <input 
-                        type="email" 
+                      <input
+                        type="text"
                         disabled
-                        value={formData.email}
+                        value="No se guarda en claro"
                         className="w-full bg-[#131722] border-transparent opacity-70 rounded-xl py-3 pl-10 pr-4 text-sm text-gray-400 cursor-not-allowed"
                       />
                     </div>
-                    <p className="text-[10px] text-[#D4AF37] flex items-center gap-1"><Check size={10} /> Correo verificado</p>
+                    <p className="text-[10px] text-[#D4AF37] flex items-center gap-1">
+                      <Check size={10} /> El servidor solo guarda su HMAC: sirve para el login y para nada más.
+                    </p>
                   </div>
+
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Teléfono</label>
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Rol</label>
                     <div className="relative">
-                      <Phone size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-                      <input 
-                        type="text" 
-                        disabled={!isEditing}
-                        value={formData.telefono}
-                        onChange={(e) => setFormData({...formData, telefono: e.target.value})}
-                        className="w-full bg-[#131722] border border-white/10 disabled:border-transparent disabled:opacity-70 rounded-xl py-3 pl-10 pr-4 text-sm text-white focus:outline-none focus:border-[#8A2BE2] transition-colors"
+                      <Crown size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                      <input
+                        type="text"
+                        disabled
+                        value={user.cuenta.rol}
+                        className="w-full bg-[#131722] border-transparent opacity-70 rounded-xl py-3 pl-10 pr-4 text-sm capitalize text-gray-400 cursor-not-allowed"
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-500">Se lee de la base en cada petición, no del token.</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Último Acceso</label>
+                    <div className="relative">
+                      <History size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                      <input
+                        type="text"
+                        disabled
+                        value={
+                          user.cuenta.ultimo_acceso_at
+                            ? new Date(user.cuenta.ultimo_acceso_at).toLocaleString("es-MX")
+                            : "—"
+                        }
+                        className="w-full bg-[#131722] border-transparent opacity-70 rounded-xl py-3 pl-10 pr-4 text-sm text-gray-400 cursor-not-allowed"
                       />
                     </div>
                   </div>
@@ -245,7 +351,7 @@ export default function CuentaPage() {
                   </div>
                   <button 
                     onClick={() => {
-                      setEmailForReset(formData.email);
+                      setEmailForReset("");
                       setResetStatus("idle");
                       setShowPasswordModal(true);
                     }}
@@ -279,6 +385,36 @@ export default function CuentaPage() {
                     Te recomendamos encarecidamente activar la Autenticación en 2 Pasos (2FA) para proteger tus fondos y retiros.
                   </p>
                 </div>
+
+                {/* Anonimizar no es borrar: la fila sigue ahí, disociada. Es la
+                    diferencia entre "que no se sepa quién fuiste" y "que el
+                    estudio pierda los datos que ya analizó". */}
+                <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 p-4 border border-red-500/20 rounded-xl bg-red-950/10">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center border border-red-500/30 text-red-400">
+                      <User size={18} />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-white text-sm">Anonimizar mi participación</h4>
+                      <p className="text-xs text-gray-400 mt-0.5 max-w-md leading-relaxed">
+                        Tu alias y tu correo dejan de estar asociados a lo recolectado. Los resultados del estudio se
+                        conservan disociados: la fila no se borra, se desliga de ti.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowAnonimizarModal(true)}
+                    className="w-full md:w-auto shrink-0 border border-red-500/40 text-red-300 hover:bg-red-500 hover:text-white font-bold py-2 px-4 rounded-lg transition-colors text-xs uppercase tracking-widest"
+                  >
+                    Anonimizar
+                  </button>
+                </div>
+
+                {avisoAnonimizado && (
+                  <p className="rounded-xl border border-[#D4AF37]/30 bg-[#D4AF37]/10 px-4 py-3 text-sm text-[#D4AF37]">
+                    {avisoAnonimizado}
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -397,6 +533,45 @@ export default function CuentaPage() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRMACIÓN DE ANONIMIZADO */}
+      {showAnonimizarModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-md rounded-3xl border border-red-500/30 bg-[#0B0E14] p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="mb-6 flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full border border-red-500/30 bg-red-500/10">
+                <AlertCircle size={22} className="text-red-400" />
+              </div>
+              <h3 className="text-lg font-bold text-white">¿Anonimizar tu participación?</h3>
+            </div>
+
+            <p className="mb-4 text-sm leading-relaxed text-gray-400">
+              Tu alias y tu correo dejan de identificarte. Lo que ya se recolectó en tus sesiones{" "}
+              <span className="text-white">no se borra</span>: se conserva disociado para el estudio.
+            </p>
+            <p className="mb-6 text-xs leading-relaxed text-gray-500">
+              Si lo que quieres es borrar lo recolectado, eso es otra cosa y está en el panel de permisos:
+              &ldquo;Revocar y borrar todo lo de esta sesión&rdquo;.
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowAnonimizarModal(false)}
+                className="flex-1 rounded-xl border border-white/10 py-3 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-white/5"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => void anonimizarCuenta()}
+                disabled={anonimizando}
+                className="flex-1 rounded-xl border border-red-500/30 bg-red-500/10 py-3 text-xs font-bold uppercase tracking-widest text-red-400 transition-colors hover:bg-red-500 hover:text-white disabled:opacity-50"
+              >
+                {anonimizando ? "Anonimizando…" : "Anonimizar"}
+              </button>
+            </div>
           </div>
         </div>
       )}

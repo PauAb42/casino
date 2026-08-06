@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
 import Sidebar from "@/components/Sidebar";
+import SessionBootstrap from "@/components/SessionBootstrap";
+import ConsentBanner from "@/components/ConsentBanner";
 
 export const metadata: Metadata = {
   title: "Royal Casino | Juega y Gana",
@@ -16,6 +18,9 @@ export default function RootLayout({
   return (
     <html lang="es">
       <body className="bg-[#0B0E14] text-white flex min-h-screen">
+        {/* Identidad + sesion de laboratorio antes de que nada dependa de ellas. */}
+        <SessionBootstrap />
+        <ConsentBanner />
         <Sidebar />
         <div className="flex-1 flex flex-col h-screen overflow-hidden">
           <Navbar />

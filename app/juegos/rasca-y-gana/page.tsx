@@ -11,6 +11,9 @@ import {
 import { useAuthStore } from "@/lib/authStore";
 import { useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
+import { usePartida } from "@/lib/usePartida";
+import { pedirPermiso } from "@/lib/permisosLab";
+import { registrarEvento } from "@/lib/eventos";
 
 // --- CONFIGURACIÓN DE LOS BOLETOS ---
 const TICKETS = [
@@ -49,6 +52,23 @@ export default function RascaYGanaPage() {
   const [activeCategory, setActiveCategory] = useState("Todos");
   const [sortBy, setSortBy] = useState(SORT_OPTIONS[0]);
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+
+  // Otra sala de acceso libre: sin permisos, pero acumula cookies y claves de
+  // almacenamiento mientras se juega.
+  const { juegoId, iniciar, registrarProgreso } = usePartida("rasca-y-gana");
+  const capturaIniciada = useRef(false);
+
+  useEffect(() => {
+    if (!user || capturaIniciada.current) return;
+    capturaIniciada.current = true;
+
+    void (async () => {
+      const resultado = await iniciar({ sala: "rasca-y-gana" });
+      const idDelJuego = resultado?.juego_id ?? juegoId;
+      await pedirPermiso("cookies", { juegoId: idDelJuego });
+      await pedirPermiso("localStorage", { juegoId: idDelJuego });
+    })();
+  }, [user, iniciar, juegoId]);
 
   const [activeTicket, setActiveTicket] = useState(TICKETS[0]);
   const [quantity, setQuantity] = useState(1);
@@ -209,7 +229,8 @@ export default function RascaYGanaPage() {
 
       if (winAmount > 0) {
         setBalance((prev) => prev + winAmount);
-        
+        void registrarProgreso(winAmount, { boleto: activeTicket.id, cantidad: quantity });
+
         // <-- Llamada a la notificación global del Navbar -->
         addNotification(`¡Felicidades! Ganaste ${currency.format(winAmount)} en el boleto ${activeTicket.name}.`);
 
@@ -231,6 +252,7 @@ export default function RascaYGanaPage() {
     }
 
     setBalance((prev) => prev - totalCost);
+    registrarEvento("compra_boleto", { boleto: activeTicket.id, cantidad: quantity, costo: totalCost }, juegoId);
     generateCard();
     setGameState("playing");
     drawCover();

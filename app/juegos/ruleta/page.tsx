@@ -16,8 +16,11 @@ import {
   Bell, 
 } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
-import { useBalanceStore } from "@/lib/balanceStore"; 
+import { useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
+import { usePartida } from "@/lib/usePartida";
+import { pedirPermiso } from "@/lib/permisosLab";
+import { registrarEvento } from "@/lib/eventos";
 
 const RED_NUMBERS = [
   1, 3, 5, 7, 9, 12, 14, 16, 18,
@@ -128,8 +131,11 @@ export default function RuletaPage() {
 
   const [hasNotificationPermission, setHasNotificationPermission] = useState(false);
 
-  const resultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const chatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Resultado de esta sala dentro de la sesión de laboratorio (`POST /resultados`).
+  const { juegoId, iniciar, registrarProgreso } = usePartida("ruleta");
+
+  const resultTimerRef = useRef<number | null>(null);
+  const chatTimerRef = useRef<number | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   const [selectedChip, setSelectedChip] = useState(50);
@@ -168,25 +174,21 @@ export default function RuletaPage() {
     }
   }, []);
 
+  // El permiso pasa por el laboratorio: POST /permisos registra que la mesa lo
+  // pidió, y PATCH /permisos/:id/respuesta anota qué contestaste y en cuántos
+  // milisegundos. Cerrar el diálogo sin responder también queda registrado.
   const requestNotificationPermission = async () => {
-    if (!("Notification" in window)) {
-      alert("Tu navegador no soporta notificaciones.");
-      return;
-    }
+    await iniciar({ sala: "ruleta" });
+    const resultado = await pedirPermiso("notifications", { juegoId });
 
-    try {
-      const permission = await Notification.requestPermission();
-      if (permission === "granted") {
-        setHasNotificationPermission(true);
-        new Notification("¡Mesa Desbloqueada!", {
-          body: "Bienvenido a la Ruleta Europea de Royal Casino. ¡Buena suerte!",
-          icon: "/ruleta.png",
-        });
-      } else {
-        alert("Debes permitir las notificaciones para poder ingresar a esta mesa VIP.");
-      }
-    } catch (error) {
-      console.error("Error al solicitar permiso de notificaciones:", error);
+    if (resultado.ok) {
+      setHasNotificationPermission(true);
+      new Notification("¡Mesa Desbloqueada!", {
+        body: "Bienvenido a la Ruleta Europea de Royal Casino. ¡Buena suerte!",
+        icon: "/ruleta.png",
+      });
+    } else {
+      alert(resultado.detalle);
     }
   };
 
@@ -333,15 +335,24 @@ export default function RuletaPage() {
     setTotalWagered((previous) => roundMoney(previous + stakeSnapshot));
     setRoundsPlayed((previous) => previous + 1);
 
+    // La telemetría va en lote (`POST /eventos`), no una petición por giro.
+    registrarEvento("giro_ruleta", { apuesta: stakeSnapshot, apuestas: betsSnapshot.length }, juegoId);
+
     if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
 
-    resultTimerRef.current = setTimeout(() => {
+    resultTimerRef.current = window.setTimeout(() => {
       const totalReturn = betsSnapshot.reduce((sum, bet) => sum + payoutForBet(bet, result), 0);
       const netResult = totalReturn - stakeSnapshot;
 
       setBalance((previous) => roundMoney(previous + totalReturn));
       setRecentNumbers((previous) => [result, ...previous].slice(0, 20));
       setLastResult(result);
+
+      // Progreso parcial del resultado; el cierre irreversible se hace al salir.
+      void registrarProgreso(Math.max(0, Math.round(totalReturn)), {
+        rondas: roundsPlayed + 1,
+        ultimo_numero: result,
+      });
       setBets({});
       setBetActions([]);
       setSpinning(false);

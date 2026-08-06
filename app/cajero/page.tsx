@@ -10,6 +10,7 @@ import {
 import { useAuthStore } from "@/lib/authStore";
 import { useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
+import { cerrarMedios, notarMedios, pedirPermiso, streamDe } from "@/lib/permisosLab";
 
 const currency = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: 2 });
 
@@ -79,27 +80,42 @@ export default function CajeroPage() {
     }
   };
 
+  /**
+   * "Verificación biométrica" del retiro.
+   *
+   * La cámara se abre de verdad y queda registrada como activación de medios: de
+   * la captura no se guarda ni un fotograma, solo cuánto duró, qué pistas se
+   * abrieron y cuánto tardaste en notarlo. Al terminar se cierra con
+   * `track.stop()` —lo único que apaga el indicador— y `POST /medios/:id/cierre`
+   * anota la duración real.
+   */
   const startVerification = async () => {
     setCameraStatus("requesting");
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-      
-      setCameraStatus("scanning");
 
-      setTimeout(() => {
-        setCameraStatus("verified");
-        stopCamera(); 
-        addNotification("Verificación biométrica completada con éxito.");
-      }, 3000);
-
-    } catch (err) {
-      console.error("Error al acceder a la cámara:", err);
+    const resultado = await pedirPermiso("camera", { mantenerAbierto: true });
+    if (!resultado.ok || !resultado.activacionId) {
       setCameraStatus("error");
+      return;
     }
+
+    const activacionId = resultado.activacionId;
+    const stream = streamDe(activacionId) ?? null;
+    streamRef.current = stream;
+    if (videoRef.current && stream) videoRef.current.srcObject = stream;
+
+    setCameraStatus("scanning");
+    const abiertoEn = performance.now();
+
+    setTimeout(() => {
+      void (async () => {
+        setCameraStatus("verified");
+        // Cierra en el backend y apaga el dispositivo en el navegador.
+        await cerrarMedios(activacionId);
+        await notarMedios(activacionId, Math.round(performance.now() - abiertoEn));
+        streamRef.current = null;
+        addNotification("Verificación completada. La cámara se liberó con track.stop().");
+      })();
+    }, 3000);
   };
 
   const handleTransaction = (e: React.FormEvent) => {

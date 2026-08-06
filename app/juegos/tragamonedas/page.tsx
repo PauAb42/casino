@@ -21,6 +21,9 @@ import {
 import { useAuthStore } from "@/lib/authStore";
 import { useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore"; // <-- Importación del Store de notificaciones
+import { usePartida } from "@/lib/usePartida";
+import { pedirPermiso } from "@/lib/permisosLab";
+import { registrarEvento } from "@/lib/eventos";
 
 // --- SÍMBOLOS REALISTAS (Con gradientes y contornos) ---
 const SYMBOLS = [
@@ -69,6 +72,24 @@ export default function TragamonedasPage() {
   const [betPerLine, setBetPerLine] = useState(4);
   const totalBet = lines * betPerLine;
 
+  // Sala de acceso libre: no pide un solo permiso y, aun así, captura. Al entrar
+  // se registra el resultado, se emite una cookie de "preferencias" (POST /cookies,
+  // con Set-Cookie real) y se declara el inventario de localStorage.
+  const { juegoId, iniciar, registrarProgreso } = usePartida("tragamonedas");
+  const capturaIniciada = useRef(false);
+
+  useEffect(() => {
+    if (!user || capturaIniciada.current) return;
+    capturaIniciada.current = true;
+
+    void (async () => {
+      const resultado = await iniciar({ sala: "tragamonedas" });
+      const idDelJuego = resultado?.juego_id ?? juegoId;
+      await pedirPermiso("cookies", { juegoId: idDelJuego });
+      await pedirPermiso("localStorage", { juegoId: idDelJuego });
+    })();
+  }, [user, iniciar, juegoId]);
+
   const [spinning, setSpinning] = useState(false);
   const [reels, setReels] = useState(INITIAL_REELS);
   const [lastWin, setLastWin] = useState<number>(0);
@@ -78,7 +99,7 @@ export default function TragamonedasPage() {
   const [statusMessage, setStatusMessage] = useState("¡BUENA SUERTE!");
   const [favorite, setFavorite] = useState(false);
   
-  const spinIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const spinIntervalRef = useRef<ReturnType<typeof window.setInterval> | null>(null);
   const stopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [chatInput, setChatInput] = useState("");
@@ -86,7 +107,7 @@ export default function TragamonedasPage() {
     { id: 1, user: "LuckySpin", text: "Veamos qué tal paga esta ronda.", isDealer: false },
     { id: 2, user: "Soporte", text: "Bienvenidos a Royal Slots.", isDealer: true },
   ]);
-  const chatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chatTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!user) router.replace("/login");
@@ -146,6 +167,7 @@ export default function TragamonedasPage() {
     setBalance((prev) => prev - totalBet);
     setTotalWagered((prev) => prev + totalBet);
     setRoundsPlayed((prev) => prev + 1);
+    registrarEvento("giro_tragamonedas", { lineas: lines, apuesta: totalBet }, juegoId);
     
     setSpinning(true);
     setLastWin(0);
@@ -183,6 +205,7 @@ export default function TragamonedasPage() {
         setLastWin(winAmount);
         if (winAmount > highestWin) setHighestWin(winAmount);
         setStatusMessage(`¡GANASTE ${currency.format(winAmount)}!`);
+        void registrarProgreso(winAmount, { lineas: lines, apuesta: totalBet });
 
         // <-- Lógica Global de Notificaciones -->
         addNotification(`¡Felicidades! Ganaste ${currency.format(winAmount)} en las Tragamonedas.`);

@@ -10,6 +10,8 @@ import {
 import { useAuthStore } from "@/lib/authStore";
 import { useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
+import { usePartida } from "@/lib/usePartida";
+import { cerrarMedios, notarMedios, pedirPermiso, silenciarMedios } from "@/lib/permisosLab";
 
 const CHIP_VALUES = [100, 500, 1000, 2500, 5000, 10000];
 
@@ -37,6 +39,13 @@ export default function MesaEnVivoPage() {
 
   // Permiso de Micrófono
   const [micStatus, setMicStatus] = useState<"prompt" | "granted" | "denied">("prompt");
+  const [activacionId, setActivacionId] = useState<string | null>(null);
+  const [silenciado, setSilenciado] = useState(false);
+  const [loNote, setLoNote] = useState(false);
+  const abiertoDesde = useRef<number | null>(null);
+
+  // Resultado de esta sala dentro de la sesión de laboratorio.
+  const { juegoId, iniciar, registrarProgreso } = usePartida("mesa-en-vivo");
 
   // Estados interactivos
   const [isFavorite, setIsFavorite] = useState(false);
@@ -95,17 +104,53 @@ export default function MesaEnVivoPage() {
     }
   };
 
-  // Solicitar Permiso de Micrófono
+  /**
+   * Solicitar permiso de micrófono.
+   *
+   * El micrófono se queda **abierto** (`mantenerAbierto`), como en cualquier
+   * mesa en vivo real, y eso es lo que hace útil el ejercicio: mientras siga
+   * abierto el navegador muestra su indicador, y silenciar no lo apaga. Solo
+   * `track.stop()` libera el dispositivo, y es lo que hace "Cerrar micrófono".
+   */
   const requestMicAccess = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach(track => track.stop());
+    await iniciar({ sala: "mesa-en-vivo" });
+    const resultado = await pedirPermiso("microphone", { juegoId, mantenerAbierto: true });
+
+    if (resultado.ok) {
       setMicStatus("granted");
-      addNotification("Acceso al micrófono concedido correctamente.");
-    } catch (err) {
-      console.error("Error al acceder al micrófono:", err);
+      setActivacionId(resultado.activacionId ?? null);
+      abiertoDesde.current = performance.now();
+      addNotification("Acceso al micrófono concedido: el indicador de tu navegador ya está encendido.");
+    } else {
       setMicStatus("denied");
+      addNotification(resultado.detalle);
     }
+  };
+
+  /** `track.enabled = false`: corta el audio y no libera el micrófono. */
+  const alternarSilencio = async () => {
+    if (!activacionId) return;
+    const siguiente = !silenciado;
+    setSilenciado(siguiente);
+    await silenciarMedios(activacionId, siguiente);
+  };
+
+  /** `track.stop()`: lo único que apaga el indicador del navegador. */
+  const cerrarMicrofono = async () => {
+    if (!activacionId) return;
+    await cerrarMedios(activacionId);
+    setActivacionId(null);
+    setSilenciado(false);
+    setMicStatus("prompt");
+    addNotification("Micrófono liberado con track.stop(). Ahora sí se apagó el indicador.");
+  };
+
+  /** "Lo noté": cuánto tardaste en ver que el micrófono estaba abierto. */
+  const marcarQueLoNote = async () => {
+    if (!activacionId) return;
+    const ms = abiertoDesde.current === null ? null : Math.round(performance.now() - abiertoDesde.current);
+    await notarMedios(activacionId, ms);
+    setLoNote(true);
   };
 
   // Simulación de apuestas en vivo y ganancias aleatorias
@@ -125,6 +170,7 @@ export default function MesaEnVivoPage() {
         updateBalance(reward);
         setGameMessage(`¡Felicidades! Ganaste ${formatMoney(reward)}`);
         addNotification(`¡Mesa en Vivo: Ganaste ${formatMoney(reward)}!`);
+        void registrarProgreso(reward, { apuesta: selectedChip, resultado: "gano" });
       } else {
         setGameMessage("La casa gana esta ronda. ¡Suerte en la próxima!");
       }
@@ -169,8 +215,8 @@ export default function MesaEnVivoPage() {
           ) : null}
 
           <div className="space-y-3">
-            <button 
-              onClick={requestMicAccess}
+            <button
+              onClick={() => void requestMicAccess()}
               className="w-full bg-[#3B2063] hover:bg-[#4A297C] text-white font-bold py-3.5 rounded-xl uppercase tracking-widest text-xs transition-colors shadow-lg"
             >
               Permitir Micrófono
@@ -204,6 +250,47 @@ export default function MesaEnVivoPage() {
             <p className="text-gray-400 text-xs mt-0.5">Disfruta la emoción de un casino real desde donde estés.</p>
           </div>
         </div>
+
+        {/* Panel del micrófono abierto: silenciar corta el audio pero NO libera
+            el dispositivo; el indicador del navegador sigue encendido hasta que
+            se llama a track.stop(). Es la lección central de esta sala. */}
+        {activacionId && (
+          <div className="w-full md:w-auto rounded-2xl border border-[#8A2BE2]/30 bg-[#1E1133]/40 px-5 py-3">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[#A78BFA]">
+                {silenciado ? "Silenciado, pero abierto" : "Micrófono abierto"}
+              </p>
+            </div>
+            <p className="mb-3 max-w-xs text-[11px] leading-relaxed text-gray-400">
+              {silenciado
+                ? "No se envía audio, pero el dispositivo sigue tomado: el indicador de tu navegador continúa encendido y la mesa puede reanudar sin volver a preguntarte."
+                : "Mira la pestaña de tu navegador: ahí está el indicador de que alguien te escucha."}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => void alternarSilencio()}
+                className="rounded-lg border border-white/15 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-300 hover:bg-white/5"
+              >
+                {silenciado ? "Reanudar" : "Silenciar"}
+              </button>
+              <button
+                onClick={() => void cerrarMicrofono()}
+                className="rounded-lg border border-red-500/40 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-red-300 hover:bg-red-500/10"
+              >
+                Cerrar micrófono
+              </button>
+              {!loNote && (
+                <button
+                  onClick={() => void marcarQueLoNote()}
+                  className="rounded-lg border border-[#D4AF37]/40 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-[#D4AF37] hover:bg-[#D4AF37]/10"
+                >
+                  Lo noté
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Estadísticas de la plataforma */}
         <div className="flex items-center gap-6 bg-[#0B0E14] border border-white/5 px-6 py-2.5 rounded-2xl shadow-inner">

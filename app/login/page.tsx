@@ -5,18 +5,21 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Mail, Lock, Eye, EyeOff, ShieldCheck, Info, AlertCircle } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
+import { useLabStore } from "@/lib/labStore";
 
 export default function LoginPage() {
   const router = useRouter();
-  
+
+  const login = useAuthStore((s) => s.login);
+  const isLoading = useAuthStore((s) => s.isLoading);
+  const errorDeApi = useAuthStore((s) => s.error);
+  const limpiarError = useAuthStore((s) => s.limpiarError);
+  const asegurarSesion = useLabStore((s) => s.asegurarSesion);
+
   const [correo, setCorreo] = useState("");
   const [contrasena, setContrasena] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
-  
-  // Estado para manejar nuestra carga y errores simulados
-  const [isSimulating, setIsSimulating] = useState(false);
-  const [localError, setLocalError] = useState("");
 
   // 1. Cargar el correo guardado si el usuario usó "Recordarme" antes
   useEffect(() => {
@@ -29,8 +32,7 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); // El navegador valida los campos vacíos automáticamente gracias a "required"
-    setLocalError("");
-    setIsSimulating(true);
+    limpiarError();
 
     // 2. Lógica funcional de "Recordarme"
     if (rememberMe) {
@@ -39,29 +41,20 @@ export default function LoginPage() {
       localStorage.removeItem("royal_casino_email");
     }
 
-    // 3. SIMULACIÓN DE LOGIN (Sin Backend real)
-    setTimeout(() => {
-      setIsSimulating(false);
-      
-      // Simulamos un error discreto si ponen este correo específico
-      if (correo === "error@correo.com") {
-        setLocalError("El correo o la contraseña son incorrectos.");
-        return;
-      }
+    // 3. POST /auth/login: devuelve el token en el JSON y, además, la cookie
+    //    httpOnly firmada que es la que sobrevive a un refresco de la página.
+    const entro = await login(correo, contrasena);
+    if (!entro) return;
 
-      // Inyectamos un usuario ficticio en el estado global para que el Navbar lo lea
-      useAuthStore.setState({
-        user: { 
-          participante: { id: "1", alias: correo.split("@")[0], estado: "activo" }, 
-          cuenta: { id: "1", rol: "participante" } 
-        },
-        token: "token-simulado-123",
-        error: null
-      });
-
-      router.push("/");
-    }, 1000); // 1 segundo de carga simulada
+    // El recorrido empieza aquí: POST /sesiones abre la sesión de laboratorio y
+    // registra la huella del dispositivo antes de que se juegue nada.
+    await asegurarSesion();
+    router.push("/");
   };
+
+  // El backend responde 401 idéntico para correo inexistente y contraseña
+  // incorrecta (hash señuelo contra enumeración): se muestra tal cual.
+  const localError = errorDeApi;
 
   return (
     // CAMBIO: Usamos h-[100dvh] para que ocupe exactamente la pantalla y no haya scroll innecesario.
@@ -147,12 +140,12 @@ export default function LoginPage() {
               )}
             </div>
 
-            <button 
-              type="submit" 
-              disabled={isSimulating}
+            <button
+              type="submit"
+              disabled={isLoading}
               className="w-full bg-[#3B2063] hover:bg-[#4A297C] text-white font-medium py-3.5 rounded-lg transition-colors mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isSimulating ? "Iniciando..." : "INICIAR SESIÓN"}
+              {isLoading ? "Iniciando..." : "INICIAR SESIÓN"}
             </button>
           </form>
 

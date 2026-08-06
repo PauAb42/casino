@@ -2,25 +2,25 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { 
-  Calendar, ChevronDown, Gamepad2, Coins, Trophy, 
-  TrendingUp, Star, ChevronRight, CircleDashed, 
-  LayoutGrid, Spade, Ticket 
+import {
+  Calendar, ChevronDown, Gamepad2, Coins, Trophy,
+  TrendingUp, Star, ChevronRight, CircleDashed,
+  RefreshCw
 } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
+import { useCatalogoStore } from "@/lib/catalogoStore";
+import { useLabStore } from "@/lib/labStore";
+import { api } from "@/lib/api";
+import type { InventarioDeResultados } from "@/lib/api";
 
-// Datos de prueba con fechas en formato ISO real para poder filtrarlas
-const MOCK_RESULTS = [
-  { id: 1, rawDate: "2026-08-01T23:45:12", juego: "Ruleta", detalle: "Rojo · 25", apuesta: 100.00, resultado: "Perdida", ganancia: -100.00, icon: CircleDashed, color: "text-red-400" },
-  { id: 2, rawDate: "2026-08-01T23:42:03", juego: "Tragamonedas", detalle: "5 Diamantes", apuesta: 50.00, resultado: "Ganancia", ganancia: 1250.00, icon: LayoutGrid, color: "text-yellow-400" },
-  { id: 3, rawDate: "2026-08-01T23:38:51", juego: "Blackjack", detalle: "21 puntos", apuesta: 200.00, resultado: "Ganancia", ganancia: 200.00, icon: Spade, color: "text-gray-300" },
-  { id: 4, rawDate: "2026-07-30T15:35:10", juego: "Rasca y Gana", detalle: "Premio medio", apuesta: 100.00, resultado: "Ganancia", ganancia: 250.00, icon: Ticket, color: "text-[#D4AF37]" },
-  { id: 5, rawDate: "2026-07-28T20:31:44", juego: "Ruleta", detalle: "Negro · 17", apuesta: 150.00, resultado: "Perdida", ganancia: -150.00, icon: CircleDashed, color: "text-red-400" },
-  { id: 6, rawDate: "2026-07-25T18:28:22", juego: "Tragamonedas", detalle: "3 7 seguidos", apuesta: 75.00, resultado: "Ganancia", ganancia: 375.00, icon: LayoutGrid, color: "text-yellow-400" },
-  { id: 7, rawDate: "2026-07-20T21:24:05", juego: "Blackjack", detalle: "Bust", apuesta: 200.00, resultado: "Perdida", ganancia: -200.00, icon: Spade, color: "text-gray-300" },
-  { id: 8, rawDate: "2026-07-15T19:18:37", juego: "Rasca y Gana", detalle: "Sin premio", apuesta: 50.00, resultado: "Perdida", ganancia: -50.00, icon: Ticket, color: "text-[#D4AF37]" },
-  { id: 9, rawDate: "2026-07-10T14:10:00", juego: "Tragamonedas", detalle: "Giros Gratis", apuesta: 20.00, resultado: "Ganancia", ganancia: 120.00, icon: LayoutGrid, color: "text-yellow-400" },
-];
+/**
+ * Historial de partidas de la sesión de laboratorio.
+ *
+ * `GET /resultados?sesion_id=` devuelve una fila por juego —`resultados` es único
+ * por `(sesion_id, juego_id)`, un juego se juega una vez por sesión— con su
+ * puntaje, si quedó completado y las métricas que la sala fue guardando. No hay
+ * apuesta por ronda que listar: el backend modela el recorrido, no la caja.
+ */
 
 const formatMoney = (amount: number) => {
   return new Intl.NumberFormat("es-MX", {
@@ -43,39 +43,73 @@ const formatDate = (isoString: string) => {
 
 export default function ResultadosPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
+  const { user, estado } = useAuthStore();
+  const sesionId = useLabStore((s) => s.sesionId);
+  const juegosPorSlug = useCatalogoStore((s) => s.porSlug);
+  const cargarCatalogo = useCatalogoStore((s) => s.cargar);
+
+  const [inventario, setInventario] = useState<InventarioDeResultados | null>(null);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Estados de Filtros
   const [selectedGame, setSelectedGame] = useState("Todos");
-  const [startDate, setStartDate] = useState("2026-07-01");
-  const [endDate, setEndDate] = useState("2026-08-01");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
 
   useEffect(() => {
-    if (!user) {
-      router.replace("/login");
-    }
-  }, [user, router]);
+    if (estado === "anonimo") router.replace("/login");
+  }, [estado, router]);
 
-  // Filtrado y cálculo dinámico usando useMemo para optimizar rendimiento
+  useEffect(() => {
+    void cargarCatalogo();
+  }, [cargarCatalogo]);
+
+  useEffect(() => {
+    if (!sesionId) return;
+    let vivo = true;
+
+    (async () => {
+      setCargando(true);
+      try {
+        const datos = await api.resultados.listar(sesionId);
+        if (vivo) setInventario(datos);
+      } catch (err) {
+        if (vivo) setError(err instanceof Error ? err.message : "No se pudieron cargar tus resultados");
+      } finally {
+        if (vivo) setCargando(false);
+      }
+    })();
+
+    return () => {
+      vivo = false;
+    };
+  }, [sesionId]);
+
+  // Nombre del juego por id: el resultado solo trae `juego_id`.
+  const nombrePorId = useMemo(() => {
+    const mapa: Record<string, string> = {};
+    for (const juego of Object.values(juegosPorSlug)) mapa[juego.id] = juego.nombre;
+    return mapa;
+  }, [juegosPorSlug]);
+
   const filteredResults = useMemo(() => {
-    return MOCK_RESULTS.filter((item) => {
-      const itemDate = new Date(item.rawDate);
-      const start = new Date(startDate + "T00:00:00");
-      const end = new Date(endDate + "T23:59:59");
-      
-      const isWithinDate = itemDate >= start && itemDate <= end;
-      const isMatchingGame = selectedGame === "Todos" || item.juego === selectedGame;
-
-      return isWithinDate && isMatchingGame;
+    const filas = inventario?.resultados ?? [];
+    return filas.filter((fila) => {
+      const fecha = new Date(fila.iniciado_at);
+      if (startDate && fecha < new Date(startDate + "T00:00:00")) return false;
+      if (endDate && fecha > new Date(endDate + "T23:59:59")) return false;
+      if (selectedGame !== "Todos" && nombrePorId[fila.juego_id] !== selectedGame) return false;
+      return true;
     });
-  }, [selectedGame, startDate, endDate]);
+  }, [inventario, selectedGame, startDate, endDate, nombrePorId]);
 
-  // Cálculos dinámicos para las tarjetas
+  // El resumen viene del backend; los filtros solo recortan la tabla.
   const rondasJugadas = filteredResults.length;
-  const apuestadoTotal = filteredResults.reduce((acc, curr) => acc + curr.apuesta, 0);
-  const gananciaTotal = filteredResults.reduce((acc, curr) => curr.ganancia > 0 ? acc + curr.ganancia : acc, 0);
-  const gananciaNeta = filteredResults.reduce((acc, curr) => acc + curr.ganancia, 0);
-  const mayorPremio = filteredResults.length > 0 ? Math.max(...filteredResults.map(d => d.ganancia)) : 0;
+  const completados = filteredResults.filter((r) => r.completado).length;
+  const puntajeTotal = filteredResults.reduce((acc, r) => acc + r.puntaje, 0);
+  const mayorPuntaje = filteredResults.length > 0 ? Math.max(...filteredResults.map((r) => r.puntaje)) : 0;
+  const enCurso = rondasJugadas - completados;
 
   if (!user) return <div className="min-h-screen bg-[#05050A]"></div>;
 
@@ -91,7 +125,7 @@ export default function ResultadosPage() {
               Resultados
             </h1>
             <p className="text-gray-400 text-sm">
-              Consulta tu historial de juegos, ganancias y transacciones.
+              Tus partidas de esta sesión de laboratorio, tal como quedaron registradas en el backend.
             </p>
           </div>
 
@@ -117,16 +151,18 @@ export default function ResultadosPage() {
 
             {/* Filtro Juego Funcional */}
             <div className="relative flex items-center bg-[#0F131D] border border-white/10 rounded-lg px-4 py-2.5 w-full sm:w-[220px] hover:border-white/20 transition-colors shadow-inner">
-              <select 
+              {/* Las opciones salen del catálogo, no de una lista fija. */}
+              <select
                 value={selectedGame}
                 onChange={(e) => setSelectedGame(e.target.value)}
                 className="w-full bg-transparent text-sm text-gray-300 focus:outline-none appearance-none cursor-pointer pr-8 [&>option]:bg-[#0F131D]"
               >
                 <option value="Todos">Todos los juegos</option>
-                <option value="Tragamonedas">Tragamonedas</option>
-                <option value="Ruleta">Ruleta</option>
-                <option value="Blackjack">Blackjack</option>
-                <option value="Rasca y Gana">Rasca y Gana</option>
+                {Object.values(juegosPorSlug).map((juego) => (
+                  <option key={juego.id} value={juego.nombre}>
+                    {juego.nombre}
+                  </option>
+                ))}
               </select>
               <ChevronDown size={16} className="text-[#D4AF37] absolute right-4 pointer-events-none" />
             </div>
@@ -148,38 +184,40 @@ export default function ResultadosPage() {
           <div className="bg-[#0B1511] border border-[#22c55e]/30 rounded-xl p-4 flex items-center gap-3 sm:gap-4 shadow-lg overflow-hidden transition-all">
             <Coins size={32} className="text-[#22c55e] opacity-80 shrink-0" />
             <div className="min-w-0">
-              <p className="text-[9px] font-bold tracking-widest uppercase text-[#22c55e] mb-0.5 truncate">Apuestado Total</p>
-              <p className="text-lg xl:text-xl font-bold text-white truncate">{formatMoney(apuestadoTotal)}</p>
+              <p className="text-[9px] font-bold tracking-widest uppercase text-[#22c55e] mb-0.5 truncate">Puntaje Total</p>
+              <p className="text-lg xl:text-xl font-bold text-white truncate">{formatMoney(puntajeTotal)}</p>
             </div>
           </div>
 
           <div className="bg-[#17130B] border border-[#eab308]/30 rounded-xl p-4 flex items-center gap-3 sm:gap-4 shadow-lg overflow-hidden transition-all">
             <Trophy size={32} className="text-[#eab308] opacity-80 shrink-0" />
             <div className="min-w-0">
-              <p className="text-[9px] font-bold tracking-widest uppercase text-[#eab308] mb-0.5 truncate">Ganancia Total</p>
-              <p className="text-lg xl:text-xl font-bold text-white truncate">{formatMoney(gananciaTotal)}</p>
+              <p className="text-[9px] font-bold tracking-widest uppercase text-[#eab308] mb-0.5 truncate">Completados</p>
+              <p className="text-lg xl:text-xl font-bold text-white truncate">{completados}</p>
             </div>
           </div>
 
           <div className="bg-[#0B121A] border border-[#3b82f6]/30 rounded-xl p-4 flex items-center gap-3 sm:gap-4 shadow-lg overflow-hidden transition-all">
             <TrendingUp size={32} className="text-[#3b82f6] opacity-80 shrink-0" />
             <div className="min-w-0">
-              <p className="text-[9px] font-bold tracking-widest uppercase text-[#3b82f6] mb-0.5 truncate">Ganancia Neta</p>
-              <p className={`text-lg xl:text-xl font-bold truncate ${gananciaNeta >= 0 ? 'text-white' : 'text-red-400'}`}>
-                {gananciaNeta < 0 ? "-" : ""}{formatMoney(Math.abs(gananciaNeta))}
-              </p>
+              <p className="text-[9px] font-bold tracking-widest uppercase text-[#3b82f6] mb-0.5 truncate">En Curso</p>
+              <p className="text-lg xl:text-xl font-bold text-white truncate">{enCurso}</p>
             </div>
           </div>
 
           <div className="bg-[#150B16] border border-[#d946ef]/30 rounded-xl p-4 flex items-center gap-3 sm:gap-4 shadow-lg overflow-hidden transition-all">
             <Star size={32} className="text-[#d946ef] opacity-80 shrink-0" />
             <div className="min-w-0">
-              <p className="text-[9px] font-bold tracking-widest uppercase text-[#d946ef] mb-0.5 truncate">Mayor Premio</p>
-              <p className="text-lg xl:text-xl font-bold text-white truncate">{formatMoney(mayorPremio < 0 ? 0 : mayorPremio)}</p>
+              <p className="text-[9px] font-bold tracking-widest uppercase text-[#d946ef] mb-0.5 truncate">Mayor Puntaje</p>
+              <p className="text-lg xl:text-xl font-bold text-white truncate">{formatMoney(mayorPuntaje)}</p>
             </div>
           </div>
-          
+
         </div>
+
+        {error && (
+          <p className="mb-6 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-300">{error}</p>
+        )}
 
         {/* TABLA DE RESULTADOS DINÁMICA */}
         <div className="bg-[#0B0E14] border border-white/5 rounded-2xl overflow-hidden shadow-2xl">
@@ -187,49 +225,57 @@ export default function ResultadosPage() {
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead>
                 <tr className="border-b border-white/10 bg-[#131722]/50">
-                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Fecha y Hora</th>
+                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Iniciado</th>
                   <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Juego</th>
-                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Detalle</th>
-                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Apuesta</th>
-                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Resultado</th>
-                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Ganancia</th>
+                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Métricas</th>
+                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Puntaje</th>
+                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Estado</th>
+                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Cerrado</th>
                   <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {filteredResults.length > 0 ? (
+                {cargando ? (
+                  <tr>
+                    <td colSpan={7} className="py-16 text-center">
+                      <div className="flex flex-col items-center justify-center text-gray-500">
+                        <RefreshCw size={28} className="mb-4 animate-spin text-[#8A2BE2]" />
+                        <p className="text-sm">Cargando tus resultados…</p>
+                      </div>
+                    </td>
+                  </tr>
+                ) : filteredResults.length > 0 ? (
                   filteredResults.map((row) => {
-                    const isWin = row.resultado === "Ganancia";
-                    const Icon = row.icon;
-                    
+                    const metricas = Object.entries(row.metricas ?? {})
+                      .map(([clave, valor]) => `${clave}: ${String(valor)}`)
+                      .join(" · ");
+
                     return (
                       <tr key={row.id} className="hover:bg-white/[0.03] transition-colors group cursor-pointer">
                         <td className="py-4 px-6 text-sm text-gray-400 whitespace-nowrap">
-                          {formatDate(row.rawDate)}
+                          {formatDate(row.iniciado_at)}
                         </td>
                         <td className="py-4 px-6">
                           <div className="flex items-center gap-3">
                             <div className="w-8 h-8 rounded bg-[#131722] border border-white/10 flex items-center justify-center shrink-0">
-                              <Icon size={16} className={row.color} />
+                              <Gamepad2 size={16} className="text-[#a855f7]" />
                             </div>
-                            <span className="text-sm font-medium text-gray-200">{row.juego}</span>
+                            <span className="text-sm font-medium text-gray-200">
+                              {nombrePorId[row.juego_id] ?? "Juego del catálogo"}
+                            </span>
                           </div>
                         </td>
-                        <td className="py-4 px-6 text-sm text-gray-300">
-                          {row.detalle}
+                        <td className="py-4 px-6 text-sm text-gray-300 max-w-[280px] truncate" title={metricas}>
+                          {metricas || "—"}
                         </td>
-                        <td className="py-4 px-6 text-sm text-gray-200 font-mono">
-                          {formatMoney(row.apuesta)}
-                        </td>
+                        <td className="py-4 px-6 text-sm text-gray-200 font-mono">{row.puntaje}</td>
                         <td className="py-4 px-6 text-sm">
-                          <span className={isWin ? "text-green-500 font-medium" : "text-red-500 font-medium"}>
-                            {row.resultado}
+                          <span className={row.completado ? "text-green-500 font-medium" : "text-yellow-500 font-medium"}>
+                            {row.completado ? "Completado" : "En curso"}
                           </span>
                         </td>
-                        <td className="py-4 px-6 text-sm font-bold font-mono">
-                          <span className={isWin ? "text-green-500" : "text-red-500"}>
-                            {isWin ? formatMoney(row.ganancia) : `-${formatMoney(Math.abs(row.ganancia))}`}
-                          </span>
+                        <td className="py-4 px-6 text-sm text-gray-400 whitespace-nowrap">
+                          {row.completado_at ? formatDate(row.completado_at) : "—"}
                         </td>
                         <td className="py-4 px-6 text-right">
                           <ChevronRight size={18} className="text-[#D4AF37] opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
@@ -242,7 +288,11 @@ export default function ResultadosPage() {
                     <td colSpan={7} className="py-16 text-center">
                       <div className="flex flex-col items-center justify-center text-gray-500">
                         <CircleDashed size={40} className="mb-4 opacity-30" />
-                        <p className="text-sm">No se encontraron resultados para los filtros seleccionados.</p>
+                        <p className="text-sm">
+                          {sesionId
+                            ? "Todavía no jugaste nada en esta sesión de laboratorio."
+                            : "Inicia sesión para abrir una sesión de laboratorio y registrar tus partidas."}
+                        </p>
                       </div>
                     </td>
                   </tr>

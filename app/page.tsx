@@ -2,11 +2,17 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Users, Dice5, Wallet, TrendingUp, Activity, CheckCircle2, Trophy, Cookie, X } from "lucide-react";
+import { Users, Dice5, Wallet, TrendingUp, Activity, CheckCircle2, Trophy, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/authStore";
+import { useCatalogoStore } from "@/lib/catalogoStore";
+import { SALAS, salaDe } from "@/lib/salas";
 
+// Escenografía del casino: cifras de adorno que no vienen de ningún endpoint.
+// El backend no modela caja ni jugadores concurrentes, y fingir que sí sería
+// justo el tipo de dato inventado que este laboratorio enseña a mirar con dudas.
 const SIMULATED_FINANCES = { pagosHoy: "$1,245,780", gananciasHoy: "$2,987,540" };
+const SIMULATED_STATS = { usuariosActivos: "24,531", sesionesActivas: "8,745" };
 
 const RECENT_ACTIVITY = [
   { id: 1, type: "Depósito aprobado", desc: "Tarjeta **** 4567", amount: "$ 3,000 MXN", time: "Hace 5 min", color: "text-green-400" },
@@ -20,13 +26,6 @@ const WINNERS = [
   { id: 3, name: "Laura Torres", game: "Tragamonedas", amount: "$ 12,500 MXN", img: "bg-yellow-900" },
 ];
 
-const REAL_GAMES = [
-  { id: "g1", slug: "tragamonedas", nombre: "Tragamonedas", descripcion: "Acceso libre", imagenFondo: "/tragamonedas.png" },
-  { id: "g2", slug: "ruleta", nombre: "Ruleta", descripcion: "Requiere Notificaciones", imagenFondo: "/ruleta.png" },
-  { id: "g3", slug: "rasca-y-gana", nombre: "Rasca y Gana", descripcion: "Acceso libre", imagenFondo: "/rasca.png" },
-  { id: "g4", slug: "blackjack-vip", nombre: "Blackjack VIP", descripcion: "Requiere Ubicación", imagenFondo: "/blackjack-vip.png" },
-  { id: "g5", slug: "mesa-en-vivo", nombre: "Mesa en Vivo", descripcion: "Requiere Micrófono", imagenFondo: "/mesa-en-vivo.png" }
-];
 
 export default function Home() {
   const router = useRouter();
@@ -40,42 +39,27 @@ export default function Home() {
     }
   };
 
-  const [stats, setStats] = useState({ usuariosActivos: 0, juegosDisponibles: 0, sesionesActivas: 0 });
-  const [games, setGames] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  
-  const [showCookieConsent, setShowCookieConsent] = useState(false);
+  // El catálogo de juegos es real (GET /juegos); el resto del tablero sigue
+  // siendo escenografía del casino y está marcado como tal.
+  const juegos = useCatalogoStore((s) => s.juegos);
+  const cargarCatalogo = useCatalogoStore((s) => s.cargar);
+  const cargandoCatalogo = useCatalogoStore((s) => s.cargando);
+
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
 
   useEffect(() => {
-    let isMounted = true;
-    const cookiesAccepted = localStorage.getItem("royal_casino_cookies_accepted");
-    if (!cookiesAccepted) setShowCookieConsent(true);
+    if (user) void cargarCatalogo();
+  }, [user, cargarCatalogo]);
 
-    const loadDashboardData = () => {
-      setTimeout(() => {
-        if (!isMounted) return;
-        setGames(REAL_GAMES);
-        setStats({ usuariosActivos: 24531, juegosDisponibles: REAL_GAMES.length, sesionesActivas: 8745 });
-        setIsLoading(false);
-      }, 800);
-    };
-
-    loadDashboardData();
-    return () => { isMounted = false; };
-  }, []);
-
-  const acceptCookies = () => {
-    localStorage.setItem("royal_casino_cookies_accepted", "true");
-    setShowCookieConsent(false);
-  };
+  const games = juegos.filter((juego) => juego.slug in SALAS);
+  const isLoading = cargandoCatalogo && juegos.length === 0;
 
   const STATS_CARDS = [
-    { id: 1, label: "USUARIOS ACTIVOS", value: stats.usuariosActivos.toLocaleString(), trend: "Conectados", icon: Users, color: "text-[#8A2BE2]" },
-    { id: 2, label: "JUEGOS DISPONIBLES", value: stats.juegosDisponibles.toLocaleString(), trend: "Catálogo completo", icon: Dice5, color: "text-red-500" },
-    { id: 3, label: "PAGOS HOY", value: SIMULATED_FINANCES.pagosHoy, trend: "+ 18% vs ayer", icon: Wallet, color: "text-blue-500" },
-    { id: 4, label: "GANANCIAS HOY", value: SIMULATED_FINANCES.gananciasHoy, trend: "+ 9% vs ayer", icon: TrendingUp, color: "text-cyan-400" },
-    { id: 5, label: "SESIONES ACTIVAS", value: stats.sesionesActivas.toLocaleString(), trend: "En este momento", icon: Activity, color: "text-[#8A2BE2]" },
+    { id: 1, label: "USUARIOS ACTIVOS", value: SIMULATED_STATS.usuariosActivos, trend: "Escenografía", icon: Users, color: "text-[#8A2BE2]" },
+    { id: 2, label: "JUEGOS DISPONIBLES", value: juegos.length.toLocaleString(), trend: "Catálogo del backend", icon: Dice5, color: "text-red-500" },
+    { id: 3, label: "PAGOS HOY", value: SIMULATED_FINANCES.pagosHoy, trend: "Escenografía", icon: Wallet, color: "text-blue-500" },
+    { id: 4, label: "GANANCIAS HOY", value: SIMULATED_FINANCES.gananciasHoy, trend: "Escenografía", icon: TrendingUp, color: "text-cyan-400" },
+    { id: 5, label: "SESIONES ACTIVAS", value: SIMULATED_STATS.sesionesActivas, trend: "Escenografía", icon: Activity, color: "text-[#8A2BE2]" },
   ];
 
   return (
@@ -176,14 +160,14 @@ export default function Home() {
                 className="cursor-pointer group relative block rounded-2xl overflow-hidden bg-[#0B0E14] border border-white/5 hover:border-[#D4AF37]/50 transition-all shadow-lg hover:shadow-[0_0_20px_rgba(212,175,55,0.15)] text-left"
               >
                 {/* Forzamos el aspecto 4/3 para que no se estiren verticalmente */}
-                <div 
+                <div
                   className="w-full aspect-[4/3] bg-cover bg-center opacity-80 group-hover:opacity-100 transition-all duration-500 group-hover:scale-105"
-                  style={{ backgroundImage: `url(${game.imagenFondo})` }}
+                  style={{ backgroundImage: `url(${salaDe(game.slug).imagenFondo})` }}
                 ></div>
                 <div className="p-4 bg-gradient-to-t from-[#0B0E14] via-[#0B0E14]/90 to-transparent absolute bottom-0 w-full pt-16">
                   <h3 className="font-bold text-sm text-white truncate" title={game.nombre}>{game.nombre}</h3>
                   <p className="text-[10px] text-gray-400 mt-0.5 truncate uppercase tracking-wide" title={game.descripcion}>
-                    {game.descripcion}
+                    {salaDe(game.slug).requisito}
                   </p>
                 </div>
               </div>
@@ -276,31 +260,11 @@ export default function Home() {
         </div>
       </div>
 
-      {showCookieConsent && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="bg-[#0B0E14] border border-white/10 rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)] w-full max-w-lg overflow-hidden animate-in slide-in-from-bottom-10 sm:zoom-in-95 duration-300 relative">
-            <div className="p-6">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 rounded-full bg-[#1E1133] flex items-center justify-center border border-[#8A2BE2]/30">
-                  <Cookie size={20} className="text-[#8A2BE2]" />
-                </div>
-                <h3 className="text-lg font-bold text-white">Uso de Cookies</h3>
-              </div>
-              <p className="text-sm text-gray-400 mb-6 leading-relaxed">
-                Royal Casino utiliza cookies para personalizar tu experiencia, recordar tus preferencias de sesión y asegurar el correcto funcionamiento del recorrido en nuestras zonas de juego. Al continuar navegando, aceptas nuestra política de cookies.
-              </p>
-              <div className="flex flex-col sm:flex-row justify-end gap-3">
-                <button onClick={() => setShowPrivacyModal(true)} className="px-6 py-2.5 rounded-xl border border-white/10 text-gray-300 hover:text-white hover:bg-white/5 transition-colors font-medium text-sm text-center">
-                  Más información
-                </button>
-                <button onClick={acceptCookies} className="bg-[#3B2063] hover:bg-[#4A297C] text-white px-8 py-2.5 rounded-xl transition-colors font-medium text-sm text-center shadow-lg">
-                  Aceptar Cookies
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* El banner de cookies vivía aquí y solo escribía una bandera en
+          localStorage. Ahora el aviso lo muestra <ConsentBanner /> desde el
+          layout y lo registra con POST /consentimientos, midiendo cuánto tarda
+          el participante en decidir: es el dato central del laboratorio y no
+          podía quedarse en el navegador. */}
 
       {showPrivacyModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">

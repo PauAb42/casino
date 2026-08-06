@@ -10,6 +10,8 @@ import {
 import { useAuthStore } from "@/lib/authStore";
 import { useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
+import { usePartida } from "@/lib/usePartida";
+import { pedirPermiso, registrarLecturaDeUbicacion } from "@/lib/permisosLab";
 
 // --- TIPOS Y LÓGICA DEL BARAJA ---
 type Suit = "♠" | "♥" | "♦" | "♣";
@@ -67,6 +69,11 @@ export default function BlackjackVIP() {
   // Estados de Permisos y Pantalla
   const [locationStatus, setLocationStatus] = useState<"prompt" | "granted" | "denied">("prompt");
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [permisoUbicacionId, setPermisoUbicacionId] = useState<string | null>(null);
+  const [lecturaDeUbicacion, setLecturaDeUbicacion] = useState<string | null>(null);
+
+  // Resultado de esta sala dentro de la sesión de laboratorio.
+  const { juegoId, iniciar, registrarProgreso } = usePartida("blackjack-vip");
 
   // Estados del Juego
   const [gameState, setGameState] = useState<"betting" | "playing" | "dealerTurn" | "gameOver">("betting");
@@ -80,21 +87,42 @@ export default function BlackjackVIP() {
   const formatMoney = (amount: number) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(amount);
 
   // --- 1. SOLICITUD DE UBICACIÓN ---
-  const requestLocation = () => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          // Permiso concedido
-          setLocationStatus("granted");
-          setDeck(createDeck());
-        },
-        (error) => {
-          setLocationStatus("denied");
-        }
-      );
+  // Pasa por el laboratorio: se registra que la mesa pidió el permiso, cómo
+  // respondiste y cuánto tardaste, y cada lectura de posición se anota aparte.
+  // El backend nunca guarda las coordenadas exactas: solo una celda de ~1.1 km
+  // y el HMAC de la posición.
+  const requestLocation = async () => {
+    await iniciar({ sala: "blackjack-vip" });
+    const resultado = await pedirPermiso("location", { juegoId });
+
+    if (resultado.ok) {
+      setLocationStatus("granted");
+      setDeck(createDeck());
+      setLecturaDeUbicacion(resultado.detalle);
+      if (resultado.permiso) setPermisoUbicacionId(resultado.permiso.id);
     } else {
       setLocationStatus("denied");
+      setLecturaDeUbicacion(resultado.detalle);
     }
+  };
+
+  /**
+   * La demostración del ejercicio: una concesión, muchas lecturas.
+   *
+   * `watchPosition` puede releer la posición cuantas veces quiera sin volver a
+   * preguntar, y el contador de lecturas frente al de diálogos es justo lo que
+   * el informe enseña al final.
+   */
+  const volverALeerUbicacion = () => {
+    if (!permisoUbicacionId) return;
+    navigator.geolocation.getCurrentPosition(async (posicion) => {
+      const lecturas = await registrarLecturaDeUbicacion(permisoUbicacionId, posicion);
+      if (lecturas !== null) {
+        setLecturaDeUbicacion(
+          `La mesa volvió a leer tu ubicación sin preguntarte de nuevo. Van ${lecturas} lecturas con un solo permiso concedido.`,
+        );
+      }
+    });
   };
 
   // --- ESCUCHADOR PANTALLA COMPLETA ---
@@ -198,6 +226,9 @@ export default function BlackjackVIP() {
     const pScore = calculateScore(pHand);
     const dScore = calculateScore(dHand.map(c => ({...c, isHidden: false})));
 
+    // Progreso de la mano en el resultado de la sesión (PATCH /resultados/:id).
+    void registrarProgreso(pScore, { motivo: reason, puntaje_crupier: dScore });
+
     if (reason === "bust") {
       setMessage("¡Te pasaste! Pierdes.");
     } else if (reason === "blackjack") {
@@ -246,13 +277,15 @@ export default function BlackjackVIP() {
           {locationStatus === "denied" ? (
             <div className="bg-red-950/30 border border-red-500/30 p-4 rounded-xl mb-6 flex items-start gap-3 text-left">
               <ShieldAlert size={20} className="text-red-400 shrink-0 mt-0.5" />
-              <p className="text-xs text-red-300">Permiso denegado. Por favor, habilita la ubicación en tu navegador para continuar.</p>
+              <p className="text-xs text-red-300">
+                {lecturaDeUbicacion ?? "Permiso denegado. Habilita la ubicación en tu navegador para continuar."}
+              </p>
             </div>
           ) : null}
 
           <div className="space-y-3">
-            <button 
-              onClick={requestLocation}
+            <button
+              onClick={() => void requestLocation()}
               className="w-full bg-[#3B2063] hover:bg-[#4A297C] text-white font-bold py-3.5 rounded-xl uppercase tracking-widest text-xs transition-colors shadow-lg"
             >
               Permitir Ubicación
@@ -298,6 +331,23 @@ export default function BlackjackVIP() {
           <HelpCircle size={20} className="text-gray-400 cursor-pointer hover:text-white" />
         </div>
       </header>
+
+      {/* Una concesión, muchas lecturas: la mesa puede releer tu posición sin
+          volver a preguntar, y eso es justo lo que el informe final enseña. */}
+      {permisoUbicacionId && (
+        <div className="shrink-0 flex flex-wrap items-center gap-3 border-b border-[#8A2BE2]/20 bg-[#1E1133]/40 px-6 py-2.5">
+          <MapPin size={14} className="text-[#A78BFA] shrink-0" />
+          <p className="flex-1 min-w-[200px] text-[11px] leading-relaxed text-gray-300">
+            {lecturaDeUbicacion ?? "La mesa tiene tu ubicación."}
+          </p>
+          <button
+            onClick={volverALeerUbicacion}
+            className="rounded-lg border border-[#8A2BE2]/40 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-[#A78BFA] transition-colors hover:bg-[#8A2BE2]/20"
+          >
+            Volver a leer sin preguntar
+          </button>
+        </div>
+      )}
 
       {/* Game Area (La Mesa) */}
       <main className="flex-1 relative flex items-center justify-center p-4 lg:p-10 overflow-hidden">

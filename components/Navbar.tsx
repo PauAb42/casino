@@ -4,9 +4,9 @@ import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { 
-  Home, Gamepad2, Gift, User, CreditCard, 
-  HeadphonesIcon, Bell, ChevronDown, LogOut, 
-  Settings, CheckCheck, Trash2
+  Home, Gamepad2, Gift, User, CreditCard,
+  HeadphonesIcon, Bell, ChevronDown, LogOut,
+  Settings, CheckCheck, Trash2, ScrollText
 } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
 import { useNotificationStore } from "@/lib/notificationStore";
@@ -46,8 +46,11 @@ export default function Navbar() {
     setShowLogoutAlert(true);
   };
 
-  const confirmLogout = () => {
-    if (logout) logout();
+  // Cierra la sesión de laboratorio como `abandonada` (salir a medias no es
+  // terminar el recorrido), limpia la cookie httpOnly con POST /auth/logout y
+  // recién entonces suelta la pantalla.
+  const confirmLogout = async () => {
+    await logout();
     setShowLogoutAlert(false);
     router.push("/login");
   };
@@ -140,6 +143,15 @@ export default function Navbar() {
                   <CreditCard size={18} className={isActive('/cajero') ? "text-[#8A2BE2]" : ""}/>
                   <span className="text-[11px] font-bold tracking-widest uppercase">Cajero</span>
                 </Link>
+
+                {/* El panel del estudio solo aparece con rol; el backend lo
+                    vuelve a comprobar en cada petición de todas formas. */}
+                {(user.cuenta?.rol === "admin" || user.cuenta?.rol === "investigador") && (
+                  <Link href="/panel" className={`flex items-center gap-2 h-full border-b-2 transition-all ${isActive('/panel') ? 'text-white border-[#D4AF37]' : 'text-gray-400 border-transparent hover:text-white hover:border-white/20'}`}>
+                    <ScrollText size={18} className={isActive('/panel') ? "text-[#D4AF37]" : ""}/>
+                    <span className="text-[11px] font-bold tracking-widest uppercase">Panel</span>
+                  </Link>
+                )}
               </>
             )}
           </nav>

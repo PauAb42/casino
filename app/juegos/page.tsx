@@ -1,51 +1,30 @@
 "use client";
 
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { ShieldAlert } from "lucide-react";
+import { RefreshCw, ShieldAlert } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
-
-// Lista oficial de juegos basada en el recorrido del casino
-const GAMES = [
-  {
-    slug: "tragamonedas",
-    nombre: "Tragamonedas",
-    descripcion: "Acceso libre (Gratis)",
-    imagenFondo: "/tragamonedas.png",
-    colorAcento: "bg-yellow-500"
-  },
-  {
-    slug: "ruleta",
-    nombre: "Ruleta",
-    descripcion: "Requiere Notificaciones",
-    imagenFondo: "/ruleta.png",
-    colorAcento: "bg-orange-500"
-  },
-  {
-    slug: "rasca-y-gana",
-    nombre: "Rasca y Gana",
-    descripcion: "Acceso libre",
-    imagenFondo: "/rasca.png",
-    colorAcento: "bg-emerald-500"
-  },
-  {
-    slug: "blackjack-vip",
-    nombre: "Blackjack VIP",
-    descripcion: "Requiere Ubicación",
-    imagenFondo: "/blackjack-vip.png",
-    colorAcento: "bg-red-500"
-  },
-  {
-    slug: "mesa-en-vivo",
-    nombre: "Mesa en Vivo",
-    descripcion: "Requiere Micrófono",
-    imagenFondo: "/mesa-en-vivo.png",
-    colorAcento: "bg-blue-500"
-  }
-];
+import { useCatalogoStore } from "@/lib/catalogoStore";
+import { SALAS, salaDe } from "@/lib/salas";
 
 export default function JuegosPage() {
   const router = useRouter();
   const { user } = useAuthStore();
+
+  // GET /juegos: el catálogo es del backend (nombre, descripción, requisito) y
+  // el front solo aporta la parte visual de cada sala.
+  const juegos = useCatalogoStore((s) => s.juegos);
+  const cargando = useCatalogoStore((s) => s.cargando);
+  const cargado = useCatalogoStore((s) => s.cargado);
+  const cargar = useCatalogoStore((s) => s.cargar);
+
+  useEffect(() => {
+    if (user) void cargar();
+  }, [user, cargar]);
+
+  // Solo las salas que el frontend sabe pintar; el catálogo trae además los
+  // juegos de laboratorio que no tienen sala propia.
+  const salas = juegos.filter((juego) => juego.slug in SALAS);
 
   // El "cadenero" de los clics
   const handleGameAction = (slug: string) => {
@@ -75,46 +54,63 @@ export default function JuegosPage() {
       </div>
 
       {/* Cuadrícula de Juegos */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
-        {GAMES.map((game) => (
-          <div
-            key={game.slug}
-            onClick={() => handleGameAction(game.slug)}
-            className="cursor-pointer group relative block rounded-3xl overflow-hidden bg-[#0B0E14] border border-white/5 hover:border-[#D4AF37]/50 transition-all duration-300 shadow-lg hover:shadow-[0_0_30px_rgba(212,175,55,0.15)] h-64 sm:h-72"
-          >
-            {/* Imagen de Fondo con Zoom */}
-            <div 
-              className="absolute inset-0 bg-cover bg-center opacity-60 group-hover:opacity-100 transition-all duration-700 group-hover:scale-105"
-              style={{ backgroundImage: `url(${game.imagenFondo})` }}
-            ></div>
-            
-            {/* Degradado oscuro para que el texto resalte */}
-            <div className="absolute inset-0 bg-gradient-to-t from-[#05050A] via-[#05050A]/70 to-transparent pointer-events-none"></div>
-            
-            {/* Contenido de la Tarjeta */}
-            <div className="absolute bottom-0 w-full p-6 sm:p-8 flex flex-col justify-end">
-              <h2 className="font-bold text-2xl text-white mb-2 group-hover:text-[#D4AF37] transition-colors">
-                {game.nombre}
-              </h2>
-              
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${game.colorAcento} shadow-[0_0_8px_currentColor]`}></span>
-                <p className="font-medium text-xs text-gray-300 uppercase tracking-widest">
-                  {game.descripcion}
-                </p>
-              </div>
+      {cargando && !cargado ? (
+        <div className="flex flex-col items-center justify-center py-24 rounded-3xl border border-white/5 bg-[#0B0E14]">
+          <RefreshCw size={28} className="text-[#8A2BE2] animate-spin mb-4" />
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Cargando catálogo…</p>
+        </div>
+      ) : salas.length === 0 ? (
+        <div className="rounded-3xl border border-white/5 bg-[#0B0E14] p-12 text-center">
+          <p className="text-sm text-gray-400">
+            El catálogo del laboratorio está vacío. Corre <code className="text-[#D4AF37]">npm run db:seed</code> en el
+            backend para sembrar las salas.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
+          {salas.map((game) => {
+            const sala = salaDe(game.slug);
+            return (
+              <div
+                key={game.id}
+                onClick={() => handleGameAction(game.slug)}
+                className="cursor-pointer group relative block rounded-3xl overflow-hidden bg-[#0B0E14] border border-white/5 hover:border-[#D4AF37]/50 transition-all duration-300 shadow-lg hover:shadow-[0_0_30px_rgba(212,175,55,0.15)] h-64 sm:h-72"
+              >
+                {/* Imagen de Fondo con Zoom */}
+                <div
+                  className="absolute inset-0 bg-cover bg-center opacity-60 group-hover:opacity-100 transition-all duration-700 group-hover:scale-105"
+                  style={{ backgroundImage: `url(${sala.imagenFondo})` }}
+                ></div>
 
-              {/* Botón flotante oculto que aparece en hover */}
-              <div className="mt-4 overflow-hidden h-0 group-hover:h-10 transition-all duration-300 opacity-0 group-hover:opacity-100">
-                <span className="inline-block bg-[#3B2063] text-white text-[10px] font-bold tracking-widest uppercase px-4 py-2 rounded-lg">
-                  Entrar a la sala →
-                </span>
+                {/* Degradado oscuro para que el texto resalte */}
+                <div className="absolute inset-0 bg-gradient-to-t from-[#05050A] via-[#05050A]/70 to-transparent pointer-events-none"></div>
+
+                {/* Contenido de la Tarjeta */}
+                <div className="absolute bottom-0 w-full p-6 sm:p-8 flex flex-col justify-end">
+                  <h2 className="font-bold text-2xl text-white mb-2 group-hover:text-[#D4AF37] transition-colors">
+                    {game.nombre}
+                  </h2>
+
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${sala.colorAcento} shadow-[0_0_8px_currentColor]`}></span>
+                    <p className="font-medium text-xs text-gray-300 uppercase tracking-widest">{sala.requisito}</p>
+                  </div>
+
+                  <p className="mt-2 text-xs text-gray-400 leading-relaxed line-clamp-2">{game.descripcion}</p>
+
+                  {/* Botón flotante oculto que aparece en hover */}
+                  <div className="mt-4 overflow-hidden h-0 group-hover:h-10 transition-all duration-300 opacity-0 group-hover:opacity-100">
+                    <span className="inline-block bg-[#3B2063] text-white text-[10px] font-bold tracking-widest uppercase px-4 py-2 rounded-lg">
+                      Entrar a la sala →
+                    </span>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        ))}
-      </div>
-      
+            );
+          })}
+        </div>
+      )}
+
     </div>
   );
 }

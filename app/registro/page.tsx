@@ -1,25 +1,33 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Mail, Lock, Eye, EyeOff, ShieldCheck, Gift, Crown, User, Calendar, CheckCircle2, X } from "lucide-react";
+import { useAuthStore } from "@/lib/authStore";
+import type { RangoEdad } from "@/lib/api";
 
 export default function RegistroPage() {
   const router = useRouter();
-  
+
+  const registrar = useAuthStore((s) => s.registrar);
+  const isLoading = useAuthStore((s) => s.isLoading);
+  const error = useAuthStore((s) => s.error);
+  const limpiarError = useAuthStore((s) => s.limpiarError);
+  // La política de contraseñas vive en el dominio del backend y se consulta:
+  // duplicarla aquí garantizaría que un día dejaran de coincidir.
+  const politica = useAuthStore((s) => s.politica);
+  const cargarPolitica = useAuthStore((s) => s.cargarPolitica);
+
   // Estados de formulario
   const [alias, setAlias] = useState("");
   const [correo, setCorreo] = useState("");
   const [rangoEdad, setRangoEdad] = useState("");
   const [contrasena, setContrasena] = useState("");
-  
+
   const [showPassword, setShowPassword] = useState(false);
   const [aceptoTerminos, setAceptoTerminos] = useState(false);
-  
-  // Estados de carga y éxito
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
+
   const [success, setSuccess] = useState(false);
 
   // Estados para las ventanas emergentes (Modales)
@@ -28,28 +36,28 @@ export default function RegistroPage() {
     type: null,
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    void cargarPolitica();
+    return () => limpiarError();
+  }, [cargarPolitica, limpiarError]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!aceptoTerminos) return;
-    
-    setIsLoading(true);
-    setError("");
 
-    // SIMULACIÓN DE REGISTRO (Sin Backend real)
-    setTimeout(() => {
-      setIsLoading(false);
-      
-      if (alias === "ErrorUser") {
-        setError("Este alias ya está en uso. Por favor, elige otro.");
-        return;
-      }
+    // POST /auth/registro: crea participante y cuenta en una transacción. El
+    // correo no se persiste en claro, se guarda su HMAC (email_hash).
+    const creada = await registrar({
+      alias,
+      correo,
+      contrasena,
+      rango_edad: rangoEdad as RangoEdad,
+    });
+    if (!creada) return;
 
-      setSuccess(true);
-      
-      setTimeout(() => {
-        router.push("/login");
-      }, 2000);
-    }, 1500); 
+    // El alta no emite token: dar de alta y entrar son actos distintos.
+    setSuccess(true);
+    setTimeout(() => router.push("/login"), 2000);
   };
 
   const closeModal = () => setModalConfig({ isOpen: false, type: null });
@@ -199,12 +207,13 @@ export default function RegistroPage() {
                       <label className="block text-xs text-gray-400 mb-1.5">Contraseña</label>
                       <div className="relative">
                         <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-                        <input 
+                        <input
                           type={showPassword ? "text" : "password"}
                           value={contrasena}
                           onChange={(e) => setContrasena(e.target.value)}
-                          placeholder="Crea una contraseña segura (Min. 10 chars)"
-                          minLength={10}
+                          placeholder={`Crea una contraseña segura (Min. ${politica?.largo_minimo ?? 10} chars)`}
+                          minLength={politica?.largo_minimo ?? 10}
+                          maxLength={politica?.largo_maximo ?? 128}
                           className="w-full bg-[#0F111A] border border-white/5 rounded-lg py-2.5 pl-10 pr-10 text-sm text-white focus:outline-none focus:border-[#8A2BE2] transition-colors"
                           required
                         />
@@ -218,6 +227,10 @@ export default function RegistroPage() {
                       </div>
                     </div>
                   </div>
+
+                  {politica && (
+                    <p className="text-[11px] text-gray-500 -mt-4">{politica.descripcion}</p>
+                  )}
 
                   {error && <p className="text-red-400 text-sm">{error}</p>}
 
