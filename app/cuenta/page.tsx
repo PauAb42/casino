@@ -4,11 +4,12 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { 
   User, Shield, Bell, CreditCard, 
-  Mail, Phone, Lock, Edit2, Check, 
+  Mail, Lock, Edit2, Check, 
   Crown, History, AlertCircle, Save,
   Smartphone, Gamepad2, X, ArrowRight
 } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
+import { useSesionRequerida } from "@/lib/useSesionRequerida";
 import { useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
 import { ApiError, api } from "@/lib/api";
@@ -20,8 +21,8 @@ const currency = new Intl.NumberFormat("es-MX", { style: "currency", currency: "
 
 export default function CuentaPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
-  const { balance } = useBalanceStore();
+  const { user, resolviendo } = useSesionRequerida();
+  const saldo = useBalanceStore((s) => s.saldo);
   const { addNotification } = useNotificationStore();
 
   const [activeTab, setActiveTab] = useState<"perfil" | "seguridad" | "preferencias">("perfil");
@@ -106,7 +107,7 @@ export default function CuentaPage() {
     }
   };
 
-  if (!user) return <div className="min-h-screen bg-[#05050A]"></div>;
+  if (resolviendo || !user) return <div className="min-h-screen bg-[#05050A]" />;
 
   return (
     <div className="min-h-screen bg-[#05050A] text-white font-sans pb-20 relative">
@@ -138,7 +139,7 @@ export default function CuentaPage() {
                 </div>
                 <div className="flex flex-col text-left">
                   <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Saldo Real</span>
-                  <span className="text-sm font-bold text-white">{currency.format(balance)}</span>
+                  <span className="text-sm font-bold text-white">{currency.format(saldo)}</span>
                 </div>
               </div>
 

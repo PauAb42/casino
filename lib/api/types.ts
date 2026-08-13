@@ -711,3 +711,255 @@ export interface ReciboDeBorrado {
   no_se_va: RecursoConservado[];
   lectura: string;
 }
+
+// --------------------------------------------------------------------------
+// Economia del casino
+// --------------------------------------------------------------------------
+
+/**
+ * El dinero viaja en **centavos enteros** y, por comodidad, tambien en pesos.
+ *
+ * La cifra autoritativa es siempre `*_centavos`: es la que se manda de vuelta al
+ * apostar o depositar. Los `*_mxn` existen solo para pintar. Operar con los
+ * pesos y volver a multiplicar por 100 reintroduciria exactamente los errores de
+ * coma flotante que el backend evita guardando enteros.
+ */
+export interface Billetera {
+  id: string;
+  saldo_centavos: number;
+  saldo_mxn: number;
+  moneda: "MXN";
+  bloqueada: boolean;
+  actualizado_at: string;
+}
+
+export type TipoDeMovimiento =
+  | "deposito"
+  | "retiro"
+  | "apuesta"
+  | "premio"
+  | "devolucion"
+  | "bono"
+  | "ajuste";
+
+export interface MovimientoDeBilletera {
+  id: string;
+  /**
+   * Orden de insercion, y la unica forma correcta de recorrer la cadena de
+   * saldos. Ordenar por `creado_at` no sirve: los movimientos de una misma
+   * transaccion (la apuesta y su premio) comparten la marca al microsegundo,
+   * porque `now()` en PostgreSQL devuelve la hora de inicio de la transaccion.
+   */
+  secuencia: number;
+  tipo: TipoDeMovimiento;
+  monto_centavos: number;
+  monto_mxn: number;
+  saldo_posterior_centavos: number;
+  saldo_posterior_mxn: number;
+  concepto: string;
+  sesion_id: string | null;
+  juego_id: string | null;
+  ronda_id: string | null;
+  metadatos: Record<string, unknown>;
+  creado_at: string;
+}
+
+export interface ResumenDeJuego {
+  rondas: number;
+  ganadas: number;
+  apostado_centavos: number;
+  apostado_mxn: number;
+  retornado_centavos: number;
+  retornado_mxn: number;
+  neto_centavos: number;
+  neto_mxn: number;
+  mayor_premio_centavos: number;
+  mayor_premio_mxn: number;
+}
+
+/** Lo que impide retirar ahora mismo, con su motivo en texto. */
+export interface EstadoDeRetiro {
+  bloqueado: boolean;
+  rollover_pendiente_centavos: number;
+  rollover_pendiente_mxn: number;
+  motivo: string | null;
+}
+
+export interface EstadoDeCaja {
+  billetera: Billetera;
+  caja: Record<string, { operaciones: number; total_centavos: number; total_mxn: number }>;
+  juego: ResumenDeJuego;
+  retiro: EstadoDeRetiro;
+}
+
+export type EstadoDeRonda = "abierta" | "resuelta" | "anulada";
+
+/** Slugs de las salas que aceptan saldo real. */
+export type SalaConApuesta =
+  | "ruleta"
+  | "tragamonedas"
+  | "rasca-y-gana"
+  | "mesa-en-vivo"
+  | "blackjack-vip";
+
+export type TipoApuestaRuleta =
+  | "numero" | "rojo" | "negro" | "par" | "impar"
+  | "bajo" | "alto" | "docena" | "columna";
+
+export interface ApuestaDeRuleta {
+  tipo: TipoApuestaRuleta;
+  valor?: number | null;
+  monto_centavos: number;
+}
+
+export interface CartaDeBlackjack {
+  palo: "picas" | "corazones" | "diamantes" | "treboles";
+  rango: string;
+  valor: number;
+}
+
+/**
+ * El desenlace es distinto en cada sala, asi que se tipa como union laxa: el
+ * componente de cada juego sabe cual le toca y lo estrecha al leerlo.
+ */
+export type DesenlaceDeRonda = Record<string, unknown>;
+
+/**
+ * El comprobante de juego justo.
+ *
+ * `semilla_servidor` llega en `null` mientras la ronda sigue abierta: revelarla
+ * antes permitiria calcular el resultado y decidir la jugada sabiendolo.
+ */
+export interface ComprobanteDeEquidad {
+  semilla_servidor_hash: string;
+  semilla_cliente: string;
+  nonce: number;
+  semilla_servidor: string | null;
+  como_verificar: string;
+}
+
+export interface RondaDeJuego {
+  id: string;
+  sesion_id: string | null;
+  juego_id: string;
+  estado: EstadoDeRonda;
+  apuesta_centavos: number;
+  apuesta_mxn: number;
+  premio_centavos: number;
+  premio_mxn: number;
+  neto_centavos: number;
+  neto_mxn: number;
+  jugada: Record<string, unknown>;
+  desenlace: DesenlaceDeRonda | null;
+  equidad: ComprobanteDeEquidad;
+  creado_at: string;
+  resuelta_at: string | null;
+}
+
+export interface RespuestaDeRonda {
+  ronda: RondaDeJuego;
+  billetera: Billetera;
+}
+
+export type AccionDeBlackjack = "pedir" | "plantarse" | "doblar";
+
+export type TipoDePromocion = "bono_saldo" | "bono_deposito" | "cashback" | "torneo";
+
+export type EstadoDeReclamo = "pendiente" | "activo" | "cumplido" | "expirado";
+
+export interface ReclamoDePromocion {
+  id: string;
+  promocion_id: string;
+  estado: EstadoDeReclamo;
+  monto_bono_centavos: number;
+  monto_bono_mxn: number;
+  rollover_requerido_centavos: number;
+  rollover_cumplido_centavos: number;
+  rollover_pendiente_centavos: number;
+  rollover_pendiente_mxn: number;
+  bloquea_retiro: boolean;
+  reclamado_at: string;
+  acreditado_at: string | null;
+  cumplido_at: string | null;
+}
+
+interface ImporteDual {
+  centavos: number;
+  mxn: number;
+}
+
+export interface Promocion {
+  id: string;
+  codigo: string;
+  titulo: string;
+  descripcion: string;
+  tipo: TipoDePromocion;
+  etiqueta: string;
+  terminos: string;
+  porcentaje: number | null;
+  monto_maximo: ImporteDual;
+  deposito_minimo: ImporteDual;
+  monto_fijo: ImporteDual;
+  rollover_multiplicador: number;
+  vigencia_texto: string;
+  vigente_hasta: string | null;
+  orden: number;
+  vigente: boolean;
+  reclamo: ReclamoDePromocion | null;
+}
+
+export type EstadoDeTorneo = "proximo" | "activo" | "finalizado";
+
+export interface InscripcionDeTorneo {
+  id: string;
+  torneo_id: string;
+  puntos: number;
+  apostado_centavos: number;
+  apostado_mxn: number;
+  premio_centavos: number;
+  inscrito_at: string;
+}
+
+export interface Torneo {
+  id: string;
+  codigo: string;
+  nombre: string;
+  descripcion: string;
+  juego_id: string | null;
+  estado: EstadoDeTorneo;
+  bolsa_centavos: number;
+  bolsa_mxn: number;
+  centavos_por_punto: number;
+  mxn_por_punto: number;
+  plazas_premiadas: number;
+  inicia_at: string;
+  termina_at: string;
+  juego: Juego | null;
+  inscripcion: InscripcionDeTorneo | null;
+}
+
+/** Una fila de la tabla: alias y codigo publico, nunca el id de cuenta. */
+export interface FilaDeClasificacion {
+  posicion: number;
+  alias: string;
+  codigo_publico: string;
+  puntos: number;
+  apostado_centavos: number;
+  apostado_mxn: number;
+  premio_estimado_centavos: number;
+  premio_estimado_mxn: number;
+}
+
+export interface DetalleDeTorneo {
+  torneo: Torneo;
+  juego: Juego | null;
+  clasificacion: FilaDeClasificacion[];
+  inscripcion: InscripcionDeTorneo | null;
+  mi_posicion: {
+    posicion: number;
+    puntos: number;
+    apostado_centavos: number;
+    premio_estimado_centavos: number;
+  } | null;
+  reparto_de_bolsa: Array<{ posicion: number; premio_centavos: number }>;
+}

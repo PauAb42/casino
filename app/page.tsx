@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { Users, Dice5, Wallet, TrendingUp, Activity, CheckCircle2, Trophy, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/authStore";

@@ -18,10 +18,10 @@ import {
   Send,
   Play
 } from "lucide-react";
-import { useAuthStore } from "@/lib/authStore";
-import { useBalanceStore } from "@/lib/balanceStore";
+import { aCentavos, useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore"; // <-- Importación del Store de notificaciones
-import { usePartida } from "@/lib/usePartida";
+import { useSalaDeJuego } from "@/lib/useSalaDeJuego";
+import { useSesionRequerida } from "@/lib/useSesionRequerida";
 import { pedirPermiso } from "@/lib/permisosLab";
 import { registrarEvento } from "@/lib/eventos";
 
@@ -64,8 +64,8 @@ const currency = new Intl.NumberFormat("es-MX", { style: "currency", currency: "
 
 export default function TragamonedasPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
-  const { balance, setBalance } = useBalanceStore();
+  const { user, resolviendo } = useSesionRequerida();
+  const saldo = useBalanceStore((s) => s.saldo);
   const { addNotification } = useNotificationStore(); // <-- Hook de notificaciones
 
   const [lines, setLines] = useState(25);
@@ -75,16 +75,30 @@ export default function TragamonedasPage() {
   // Sala de acceso libre: no pide un solo permiso y, aun así, captura. Al entrar
   // se registra el resultado, se emite una cookie de "preferencias" (POST /cookies,
   // con Set-Cookie real) y se declara el inventario de localStorage.
-  const { juegoId, iniciar, registrarProgreso } = usePartida("tragamonedas");
+  const { juegoId, apostando, error: errorDeRonda, apostar, limpiarError, partida } =
+    useSalaDeJuego("tragamonedas");
+  const { iniciar, registrarProgreso } = partida;
   const capturaIniciada = useRef(false);
 
+  /**
+   * Captura de entrada.
+   *
+   * El guard se marca **después** de que `iniciar()` responda, no antes. Al
+   * revés, si el catálogo o la sesión todavía no estaban listos el inicio
+   * devolvía `null`, el ref ya valía `true` y la captura no se reintentaba en
+   * todo el montaje: parte de la telemetría se perdía de forma intermitente y
+   * sin dejar rastro de que había faltado.
+   */
   useEffect(() => {
     if (!user || capturaIniciada.current) return;
-    capturaIniciada.current = true;
 
     void (async () => {
       const resultado = await iniciar({ sala: "tragamonedas" });
-      const idDelJuego = resultado?.juego_id ?? juegoId;
+      if (!resultado) return; // Sin partida no hay a qué atribuir la captura: se reintenta.
+
+      capturaIniciada.current = true;
+
+      const idDelJuego = resultado.juego_id ?? juegoId;
       await pedirPermiso("cookies", { juegoId: idDelJuego });
       await pedirPermiso("localStorage", { juegoId: idDelJuego });
     })();
@@ -93,9 +107,9 @@ export default function TragamonedasPage() {
   const [spinning, setSpinning] = useState(false);
   const [reels, setReels] = useState(INITIAL_REELS);
   const [lastWin, setLastWin] = useState<number>(0);
-  const [totalWagered, setTotalWagered] = useState(2350);
-  const [roundsPlayed, setRoundsPlayed] = useState(28);
-  const [highestWin, setHighestWin] = useState(1250);
+  const [totalWagered, setTotalWagered] = useState(0);
+  const [roundsPlayed, setRoundsPlayed] = useState(0);
+  const [highestWin, setHighestWin] = useState(0);
   const [statusMessage, setStatusMessage] = useState("¡BUENA SUERTE!");
   const [favorite, setFavorite] = useState(false);
   
@@ -108,10 +122,6 @@ export default function TragamonedasPage() {
     { id: 2, user: "Soporte", text: "Bienvenidos a Royal Slots.", isDealer: true },
   ]);
   const chatTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!user) router.replace("/login");
-  }, [user, router]);
 
   useEffect(() => {
     if (!user) return;
@@ -155,59 +165,91 @@ export default function TragamonedasPage() {
     }
   };
 
-  const getRandomSymbol = () => SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)];
+  /** Solo para el desenfoque de los rodillos mientras giran. No decide nada. */
+  const simboloDeAdorno = () => SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)];
 
-  const spin = () => {
-    if (spinning) return;
-    if (balance < totalBet) {
+  /** El id que manda el servidor -> el símbolo que sabe dibujar esta pantalla. */
+  const simboloPorId = (id: string) => SYMBOLS.find((s) => s.id === id) ?? SYMBOLS[SYMBOLS.length - 1];
+
+  /**
+   * Girar.
+   *
+   * Los rodillos que se ven parpadear son adorno; los que cuentan llegan en la
+   * respuesta del servidor. La versión anterior sorteaba los símbolos finales y
+   * **por separado** decidía si había premio (`Math.random() > 0.6`) con un
+   * multiplicador al azar entre 2 y 11: los símbolos en pantalla no tenían nada
+   * que ver con lo que se pagaba, y el retorno superaba el 200%, así que la
+   * máquina perdía dinero en cada giro.
+   */
+  const spin = async () => {
+    if (spinning || apostando) return;
+    if (saldo < totalBet) {
       setStatusMessage("SALDO INSUFICIENTE");
       return;
     }
 
-    setBalance((prev) => prev - totalBet);
+    limpiarError();
+    setLastWin(0);
+    setStatusMessage("GIRANDO...");
+    setSpinning(true);
+
+    // El giro visual arranca ya, para que la mesa no se sienta congelada
+    // mientras viaja la petición.
+    spinIntervalRef.current = setInterval(() => {
+      setReels([
+        [simboloDeAdorno(), simboloDeAdorno(), simboloDeAdorno()],
+        [simboloDeAdorno(), simboloDeAdorno(), simboloDeAdorno()],
+        [simboloDeAdorno(), simboloDeAdorno(), simboloDeAdorno()],
+        [simboloDeAdorno(), simboloDeAdorno(), simboloDeAdorno()],
+        [simboloDeAdorno(), simboloDeAdorno(), simboloDeAdorno()],
+      ]);
+    }, TICK_RATE_MS);
+
+    const ronda = await apostar({
+      lineas: lines,
+      apuesta_por_linea_centavos: aCentavos(betPerLine),
+    });
+
+    if (!ronda) {
+      if (spinIntervalRef.current) clearInterval(spinIntervalRef.current);
+      setReels(INITIAL_REELS);
+      setSpinning(false);
+      setStatusMessage("NO SE PUDO REGISTRAR EL GIRO");
+      return;
+    }
+
     setTotalWagered((prev) => prev + totalBet);
     setRoundsPlayed((prev) => prev + 1);
     registrarEvento("giro_tragamonedas", { lineas: lines, apuesta: totalBet }, juegoId);
-    
-    setSpinning(true);
-    setLastWin(0);
-    setStatusMessage("GIRANDO...");
 
-    spinIntervalRef.current = setInterval(() => {
-      setReels([
-        [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()],
-        [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()],
-        [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()],
-        [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()],
-        [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()],
-      ]);
-    }, TICK_RATE_MS);
+    const desenlace = ronda.desenlace as
+      | { rodillos: string[][]; lineas_premiadas: Array<{ linea: number; simbolo: string }> }
+      | null;
 
     stopTimeoutRef.current = setTimeout(() => {
       if (spinIntervalRef.current) clearInterval(spinIntervalRef.current);
 
-      const finalReels = [
-        [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()],
-        [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()],
-        [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()],
-        [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()],
-        [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()],
-      ];
-      setReels(finalReels);
+      // Los rodillos del servidor vienen como [rodillo][fila], igual que aquí.
+      if (desenlace?.rodillos) {
+        setReels(desenlace.rodillos.map((rodillo) => rodillo.map(simboloPorId)));
+      }
 
-      const isWin = Math.random() > 0.6; 
-      let winAmount = 0;
+      const winAmount = ronda.premio_mxn;
+      setLastWin(winAmount);
 
-      if (isWin) {
-        const randomMult = Math.floor(Math.random() * 10) + 2;
-        winAmount = totalBet * randomMult;
-        setBalance((prev) => prev + winAmount);
-        setLastWin(winAmount);
+      if (winAmount > 0) {
         if (winAmount > highestWin) setHighestWin(winAmount);
-        setStatusMessage(`¡GANASTE ${currency.format(winAmount)}!`);
-        void registrarProgreso(winAmount, { lineas: lines, apuesta: totalBet });
 
-        // <-- Lógica Global de Notificaciones -->
+        const cuantas = desenlace?.lineas_premiadas?.length ?? 0;
+        setStatusMessage(
+          `¡GANASTE ${currency.format(winAmount)}!${cuantas ? ` (${cuantas} línea${cuantas > 1 ? "s" : ""})` : ""}`,
+        );
+
+        void registrarProgreso(Math.round(ronda.premio_centavos / 100), {
+          lineas: lines,
+          apuesta: totalBet,
+        });
+
         addNotification(`¡Felicidades! Ganaste ${currency.format(winAmount)} en las Tragamonedas.`);
 
         if ("Notification" in window && Notification.permission === "granted") {
@@ -238,7 +280,7 @@ export default function TragamonedasPage() {
     } catch { setStatusMessage("No se pudo activar pantalla completa."); }
   };
 
-  if (!user) return <div className="h-screen bg-[#05050A]"></div>;
+  if (resolviendo || !user) return <div className="h-screen bg-[#05050A]" />;
 
   // Renderizador de Símbolos Mejorado (Efecto físico y metálico)
   const RenderSymbol = ({ sym, isBlur }: { sym: typeof SYMBOLS[0], isBlur: boolean }) => {
@@ -344,6 +386,16 @@ export default function TragamonedasPage() {
         </div>
       </header>
 
+      {/* Errores de la apuesta: saldo insuficiente, sala cerrada, red caida. */}
+      {errorDeRonda && (
+        <div className="shrink-0 bg-red-950/40 border-b border-red-500/30 px-4 py-2 text-[11px] text-red-200 flex items-center justify-between gap-4">
+          <span>{errorDeRonda}</span>
+          <button onClick={limpiarError} className="text-red-300 hover:text-white font-bold uppercase tracking-widest">
+            Cerrar
+          </button>
+        </div>
+      )}
+
       {/* CUERPO CENTRAL */}
       <div className="flex-1 flex flex-row px-4 py-4 gap-4 min-h-0 relative">
         
@@ -363,7 +415,7 @@ export default function TragamonedasPage() {
           <div className="bg-[#0B0E14] border border-white/10 rounded-xl p-4 flex flex-col justify-center gap-1 shadow-lg">
             <p className="text-[10px] text-gray-400 uppercase tracking-widest">Saldo</p>
             <div className="flex items-center justify-between">
-              <p className="font-black text-xl text-[#D4AF37] drop-shadow-[0_0_5px_rgba(212,175,55,0.5)]">{currency.format(balance)}</p>
+              <p className="font-black text-xl text-[#D4AF37] drop-shadow-[0_0_5px_rgba(212,175,55,0.5)]">{currency.format(saldo)}</p>
               <button onClick={() => router.push("/cajero")} className="w-6 h-6 border border-[#D4AF37] text-[#D4AF37] rounded flex items-center justify-center hover:bg-[#D4AF37] hover:text-black transition-colors">
                 <Plus size={14} />
               </button>
@@ -558,12 +610,12 @@ export default function TragamonedasPage() {
         <div className="w-1/4 flex flex-col items-end justify-center pr-4">
           <button 
             type="button" 
-            onClick={spin} 
-            disabled={spinning || balance < totalBet} 
+            onClick={() => void spin()} 
+            disabled={spinning || apostando || saldo < totalBet} 
             className="bg-gradient-to-b from-green-500 to-green-700 hover:from-green-400 hover:to-green-600 disabled:from-gray-700 disabled:to-gray-900 border border-green-400 disabled:border-gray-600 text-white flex items-center justify-center gap-2 px-6 lg:px-10 py-4 rounded-xl font-black text-lg transition-all shadow-[0_10px_25px_rgba(21,128,61,0.5),inset_0_2px_5px_rgba(255,255,255,0.3)] disabled:shadow-none w-48 active:scale-95"
           >
             <Play size={20} className={spinning ? "animate-pulse" : "drop-shadow-md"} fill={spinning ? "none" : "currentColor"} /> 
-            {spinning ? "GIRANDO..." : "GIRAR"}
+            {apostando ? "REGISTRANDO..." : spinning ? "GIRANDO..." : "GIRAR"}
           </button>
         </div>
       </footer>

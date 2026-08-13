@@ -1,11 +1,10 @@
 "use client";
 
 import { 
-  ShieldAlert, Calendar, Wallet, Clock, 
+  ShieldAlert, Wallet, Clock, 
   Lock, CheckCircle, Bell, GlassWater, 
   UserX, Heart, MessageSquareX, Smile, 
-  HelpCircle, ChevronRight, CheckCircle2,
-  Mail, Phone, FileText
+  HelpCircle, ChevronRight, Mail, Phone, FileText
 } from "lucide-react";
 
 const quickInfoCards = [

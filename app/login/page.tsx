@@ -34,7 +34,9 @@ export default function LoginPage() {
     e.preventDefault(); // El navegador valida los campos vacíos automáticamente gracias a "required"
     limpiarError();
 
-    // 2. Lógica funcional de "Recordarme"
+    // 2. El correo guardado solo rellena el formulario la próxima vez. Lo que
+    //    de verdad mantiene la sesión abierta es el token de larga duración que
+    //    emite el backend al recibir `recordarme`, más abajo.
     if (rememberMe) {
       localStorage.setItem("royal_casino_email", correo);
     } else {
@@ -43,7 +45,7 @@ export default function LoginPage() {
 
     // 3. POST /auth/login: devuelve el token en el JSON y, además, la cookie
     //    httpOnly firmada que es la que sobrevive a un refresco de la página.
-    const entro = await login(correo, contrasena);
+    const entro = await login(correo, contrasena, rememberMe);
     if (!entro) return;
 
     // El recorrido empieza aquí: POST /sesiones abre la sesión de laboratorio y

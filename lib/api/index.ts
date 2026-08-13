@@ -1,9 +1,23 @@
 // lib/api/index.ts
 import { pedir, salud } from "./client";
 import type {
+  AccionDeBlackjack,
   ActivacionDeMedios,
   AlcanceDeUbicacion,
+  Billetera,
   Consentimiento,
+  DetalleDeTorneo,
+  EstadoDeCaja,
+  InscripcionDeTorneo,
+  MovimientoDeBilletera,
+  Promocion,
+  ReclamoDePromocion,
+  RespuestaDeRonda,
+  ResumenDeJuego,
+  RondaDeJuego,
+  SalaConApuesta,
+  TipoDeMovimiento,
+  Torneo,
   CookieDelLaboratorio,
   Cuenta,
   DatoPasivo,
@@ -78,8 +92,15 @@ export const auth = {
   registro: (cuerpo: { alias: string; rango_edad: RangoEdad; correo: string; contrasena: string }) =>
     pedir<RespuestaDeRegistro>("/auth/registro", { metodo: "POST", cuerpo, publica: true }),
 
-  /** Devuelve el token por JSON y por cookie httpOnly a la vez. */
-  login: (cuerpo: { correo: string; contrasena: string }) =>
+  /**
+   * Devuelve el token por JSON y por cookie httpOnly a la vez.
+   *
+   * `recordarme` decide la duracion de las dos: con el, treinta dias y una
+   * sesion que sobrevive al cierre del navegador; sin el, una hora. La duracion
+   * la fija el servidor y viaja firmada dentro del token, asi que el cliente no
+   * puede concederse una sesion mas larga de la que le toca.
+   */
+  login: (cuerpo: { correo: string; contrasena: string; recordarme?: boolean }) =>
     pedir<RespuestaDeLogin>("/auth/login", { metodo: "POST", cuerpo, publica: true }),
 
   /**
@@ -488,6 +509,121 @@ export const respuestas = {
 // Mis datos: el inventario y el boton
 // --------------------------------------------------------------------------
 
+// --------------------------------------------------------------------------
+// Billetera y cajero: la unica fuente de verdad del saldo
+// --------------------------------------------------------------------------
+
+export const billetera = {
+  /** Saldo, resumen de caja, resumen de juego y si el retiro esta bloqueado. */
+  estado: () => pedir<EstadoDeCaja>("/billetera"),
+
+  movimientos: (consulta: { limite?: number; desplazamiento?: number; tipo?: TipoDeMovimiento } = {}) =>
+    pedir<{ movimientos: MovimientoDeBilletera[]; paginacion: Paginacion }>(
+      "/billetera/movimientos",
+      { consulta },
+    ),
+
+  /**
+   * Deposito. El banco es simulado —no hay pasarela detras— pero el saldo que
+   * mueve es real y persistente.
+   *
+   * `clave_idempotencia` la genera el cliente y la repite al reintentar: es lo
+   * que impide que un timeout de red acabe cobrando dos veces.
+   */
+  depositar: (cuerpo: {
+    monto_centavos: number;
+    metodo: string;
+    sesion_id?: string;
+    clave_idempotencia?: string;
+  }) =>
+    pedir<{
+      billetera: Billetera;
+      movimiento: MovimientoDeBilletera;
+      bono: { promocion: Promocion; reclamo: ReclamoDePromocion; movimiento: MovimientoDeBilletera } | null;
+      repetido: boolean;
+    }>("/billetera/depositos", { metodo: "POST", cuerpo }),
+
+  /** 422 si queda rollover pendiente de un bono activo. */
+  retirar: (cuerpo: {
+    monto_centavos: number;
+    metodo: string;
+    sesion_id?: string;
+    clave_idempotencia?: string;
+  }) =>
+    pedir<{ billetera: Billetera; movimiento: MovimientoDeBilletera; repetido: boolean }>(
+      "/billetera/retiros",
+      { metodo: "POST", cuerpo },
+    ),
+};
+
+// --------------------------------------------------------------------------
+// Rondas: una fila por apuesta, resuelta en el servidor
+// --------------------------------------------------------------------------
+
+export const rondas = {
+  /**
+   * Abre una ronda: cobra la apuesta y devuelve el desenlace ya calculado.
+   *
+   * Salvo en blackjack, la ronda vuelve `resuelta`: el cliente ya no decide
+   * nada, solo anima lo que el servidor determino. La respuesta trae la
+   * billetera actualizada para no tener que volver a pedirla.
+   */
+  abrir: (cuerpo: {
+    slug: SalaConApuesta;
+    jugada: Record<string, unknown>;
+    sesion_id?: string;
+    semilla_cliente?: string;
+  }) => pedir<RespuestaDeRonda>("/rondas", { metodo: "POST", cuerpo }),
+
+  /** Solo blackjack: `pedir`, `plantarse` o `doblar` sobre una mano abierta. */
+  accionar: (id: string, accion: AccionDeBlackjack) =>
+    pedir<RespuestaDeRonda>(`/rondas/${id}/acciones`, { metodo: "POST", cuerpo: { accion } }),
+
+  listar: (
+    consulta: { limite?: number; desplazamiento?: number; sesion_id?: string; juego_id?: string } = {},
+  ) =>
+    pedir<{ rondas: RondaDeJuego[]; resumen: ResumenDeJuego; paginacion: Paginacion }>("/rondas", {
+      consulta,
+    }),
+
+  obtener: (id: string) => pedir<{ ronda: RondaDeJuego }>(`/rondas/${id}`),
+};
+
+// --------------------------------------------------------------------------
+// Promociones y torneos
+// --------------------------------------------------------------------------
+
+export const promociones = {
+  /** Cada promocion llega con el reclamo de esta cuenta, si existe. */
+  listar: () => pedir<{ promociones: Promocion[] }>("/promociones"),
+
+  /**
+   * Reclamar. El `mensaje` de la respuesta dice lo que **de verdad** paso: un
+   * bono de deposito queda pendiente y no acredita nada hasta que se deposite.
+   */
+  reclamar: (id: string, sesion_id?: string) =>
+    pedir<{
+      promocion: Promocion;
+      reclamo: ReclamoDePromocion;
+      billetera: Billetera | null;
+      movimiento: MovimientoDeBilletera | null;
+      mensaje: string;
+    }>(`/promociones/${id}/reclamo`, { metodo: "POST", cuerpo: { sesion_id } }),
+};
+
+export const torneos = {
+  listar: () => pedir<{ torneos: Torneo[] }>("/torneos"),
+
+  /** La clasificacion se calcula al vuelo desde los puntos de las rondas. */
+  obtener: (id: string) => pedir<DetalleDeTorneo>(`/torneos/${id}`),
+
+  inscribirse: (id: string) =>
+    pedir<{ torneo: Torneo; inscripcion: InscripcionDeTorneo }>(`/torneos/${id}/inscripcion`, {
+      metodo: "POST",
+      cuerpo: {},
+    }),
+};
+
 export const misDatos = {
   /** Consultar el inventario no se audita: revisar tu rastro no deja rastro. */
   inventario: (sesion_id: string) => pedir<InventarioDeMisDatos>("/mis-datos", { consulta: { sesion_id } }),
@@ -548,6 +684,10 @@ export const api = {
   resultados,
   respuestas,
   misDatos,
+  billetera,
+  rondas,
+  promociones,
+  torneos,
   salud,
 };
 

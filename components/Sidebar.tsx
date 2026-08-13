@@ -15,7 +15,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { user, logout } = useAuthStore();
-  const { balance } = useBalanceStore();
+  const saldo = useBalanceStore((s) => s.saldo);
   
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showLogoutAlert, setShowLogoutAlert] = useState(false);
@@ -23,7 +23,7 @@ export default function Sidebar() {
   const formattedBalance = new Intl.NumberFormat("es-MX", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(balance);
+  }).format(saldo);
 
   // Ocultar el Sidebar en las pantallas de autenticación o la sala dinámica
   if (pathname === "/login" || pathname === "/registro" || pathname === "/recuperar" || pathname.startsWith("/juegos/")) {

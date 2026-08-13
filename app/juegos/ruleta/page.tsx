@@ -15,11 +15,11 @@ import {
   Users,
   Bell, 
 } from "lucide-react";
-import { useAuthStore } from "@/lib/authStore";
-import { useBalanceStore } from "@/lib/balanceStore";
+import { aCentavos, useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
-import { usePartida } from "@/lib/usePartida";
-import { pedirPermiso } from "@/lib/permisosLab";
+import { useSalaDeJuego } from "@/lib/useSalaDeJuego";
+import { useSesionRequerida } from "@/lib/useSesionRequerida";
+import { consultarEstadoDePermiso, pedirPermiso } from "@/lib/permisosLab";
 import { registrarEvento } from "@/lib/eventos";
 
 const RED_NUMBERS = [
@@ -93,46 +93,53 @@ type ChatMessage = { id: number; user: string; text: string; isDealer: boolean; 
 
 const currency = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: 2 });
 
-function roundMoney(value: number) { return Math.round((value + Number.EPSILON) * 100) / 100; }
-function secureRouletteNumber(): number {
-  const range = 2 ** 32;
-  const limit = Math.floor(range / 37) * 37;
-  const values = new Uint32Array(1);
-  do { window.crypto.getRandomValues(values); } while (values[0] >= limit);
-  return values[0] % 37;
-}
-
 function isRed(number: number) { return RED_NUMBERS.includes(number); }
 
-function payoutForBet(bet: Bet, result: number): number {
-  switch (bet.kind) {
-    case "number": return result === bet.value ? bet.amount * 36 : 0;
-    case "red": return result !== 0 && isRed(result) ? bet.amount * 2 : 0;
-    case "black": return result !== 0 && !isRed(result) ? bet.amount * 2 : 0;
-    case "even": return result !== 0 && result % 2 === 0 ? bet.amount * 2 : 0;
-    case "odd": return result !== 0 && result % 2 !== 0 ? bet.amount * 2 : 0;
-    case "low": return result >= 1 && result <= 18 ? bet.amount * 2 : 0;
-    case "high": return result >= 19 && result <= 36 ? bet.amount * 2 : 0;
-    case "dozen": return result !== 0 && Math.ceil(result / 12) === bet.value ? bet.amount * 3 : 0;
-    case "column": {
-      if (result === 0 || bet.value === undefined) return 0;
-      const expectedRemainder = bet.value === 3 ? 0 : bet.value;
-      return result % 3 === expectedRemainder ? bet.amount * 3 : 0;
-    }
-    default: return 0;
-  }
-}
+/**
+ * El vocabulario de la mesa y el de la API son el mismo, salvo el nombre.
+ *
+ * La tabla de pagos ya no vive en este archivo: la aplica el motor del servidor.
+ * Lo unico que sube el cliente es **que** se apuesta y **cuanto**, y lo que baja
+ * es el numero que salio y el retorno de cada ficha. Girar la ruleta con
+ * `crypto.getRandomValues()` aqui parecia mas seguro que `Math.random()` y no lo
+ * era: el problema nunca fue la calidad del azar, sino que quien lo generaba era
+ * el mismo que apostaba.
+ */
+const TIPO_EN_LA_API: Record<BetKind, string> = {
+  number: "numero",
+  red: "rojo",
+  black: "negro",
+  even: "par",
+  odd: "impar",
+  low: "bajo",
+  high: "alto",
+  dozen: "docena",
+  column: "columna",
+};
 
 export default function RuletaPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
-  const { balance, setBalance } = useBalanceStore(); 
+  const { user, resolviendo } = useSesionRequerida();
+  const saldo = useBalanceStore((s) => s.saldo);
   const { addNotification } = useNotificationStore(); // <-- Notificaciones globales
 
-  const [hasNotificationPermission, setHasNotificationPermission] = useState(false);
+  /**
+   * El permiso de notificaciones **no** bloquea la mesa.
+   *
+   * El banner de consentimiento del sitio promete "rechazar no te penaliza:
+   * puedes seguir jugando igual", y esta sala hacia justo lo contrario: sin
+   * notificaciones no se podía apostar. Ahora se pide, se registra y se explica
+   * para qué sirve, pero la mesa está abierta desde el primer momento.
+   */
+  const [permisoNotificaciones, setPermisoNotificaciones] = useState<"prompt" | "granted" | "denied">("prompt");
+  const [avisoDePermiso, setAvisoDePermiso] = useState<string | null>(null);
+  const [mostrarInvitacion, setMostrarInvitacion] = useState(true);
 
-  // Resultado de esta sala dentro de la sesión de laboratorio (`POST /resultados`).
-  const { juegoId, iniciar, registrarProgreso } = usePartida("ruleta");
+  // La ronda con dinero la resuelve el servidor; `partida` es la telemetría del
+  // recorrido para el estudio, que va aparte y no condiciona el juego.
+  const { juegoId, apostando, error: errorDeRonda, apostar, limpiarError, partida } =
+    useSalaDeJuego("ruleta");
+  const { iniciar, registrarProgreso } = partida;
 
   const resultTimerRef = useRef<number | null>(null);
   const chatTimerRef = useRef<number | null>(null);
@@ -154,10 +161,6 @@ export default function RuletaPage() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(INITIAL_CHAT_MESSAGES);
 
   useEffect(() => {
-    if (!user) router.replace("/login");
-  }, [user, router]);
-
-  useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTo({
         top: chatContainerRef.current.scrollHeight,
@@ -166,35 +169,61 @@ export default function RuletaPage() {
     }
   }, [chatMessages]);
 
+  /**
+   * Rehidratación del permiso.
+   *
+   * Antes esto solo miraba `Notification.permission` y, si ya estaba concedido,
+   * desbloqueaba la mesa sin llamar a `iniciar()`: las apuestas se pintaban sin
+   * quedar asociadas a ninguna partida del backend. Ahora la mesa se abre igual
+   * (el permiso nunca fue un requisito) y `iniciar()` corre siempre al montar.
+   */
   useEffect(() => {
-    if (typeof window !== "undefined" && "Notification" in window) {
-      if (Notification.permission === "granted") {
-        setHasNotificationPermission(true);
-      }
-    }
-  }, []);
+    if (!user) return;
 
-  // El permiso pasa por el laboratorio: POST /permisos registra que la mesa lo
-  // pidió, y PATCH /permisos/:id/respuesta anota qué contestaste y en cuántos
-  // milisegundos. Cerrar el diálogo sin responder también queda registrado.
-  const requestNotificationPermission = async () => {
-    await iniciar({ sala: "ruleta" });
+    void (async () => {
+      await iniciar({ sala: "ruleta" });
+
+      const estado = await consultarEstadoDePermiso("notifications");
+      if (estado.navegador === "granted") {
+        setPermisoNotificaciones("granted");
+        setMostrarInvitacion(false);
+      } else if (estado.navegador === "denied") {
+        setPermisoNotificaciones("denied");
+        setMostrarInvitacion(false);
+      }
+    })();
+  }, [user, iniciar]);
+
+  /**
+   * El permiso pasa por el laboratorio: `POST /permisos` registra que la mesa lo
+   * pidió y `PATCH /permisos/:id/respuesta` anota qué contestaste y en cuántos
+   * milisegundos. Cerrar el diálogo sin responder también queda registrado.
+   *
+   * El `juegoId` se lee en el momento de llamar y no de un render anterior: el
+   * catálogo pudo terminar de cargar mientras la persona decidía, y con el valor
+   * viejo el permiso se guardaría con `juego_id` nulo.
+   */
+  const solicitarNotificaciones = async () => {
     const resultado = await pedirPermiso("notifications", { juegoId });
 
-    if (resultado.ok) {
-      setHasNotificationPermission(true);
-      new Notification("¡Mesa Desbloqueada!", {
-        body: "Bienvenido a la Ruleta Europea de Royal Casino. ¡Buena suerte!",
+    setPermisoNotificaciones(resultado.ok ? "granted" : "denied");
+    setMostrarInvitacion(false);
+
+    // El fallo de telemetría se informa, pero no cambia lo que decidió la
+    // persona ni cierra la mesa.
+    setAvisoDePermiso(resultado.errorDeRegistro ?? null);
+
+    if (resultado.ok && "Notification" in window && Notification.permission === "granted") {
+      new Notification("Mesa lista", {
+        body: "Te avisaremos de los premios de la Ruleta Europea. ¡Buena suerte!",
         icon: "/ruleta.png",
       });
-    } else {
-      alert(resultado.detalle);
     }
   };
 
   useEffect(() => {
-    if (!user || !hasNotificationPermission) return; 
-    
+    if (!user) return;
+
     const savedTotalWagered = Number(window.localStorage.getItem("rouletteTotalWagered") ?? "0");
     const savedRoundsPlayed = Number(window.localStorage.getItem("rouletteRoundsPlayed") ?? "0");
 
@@ -219,7 +248,7 @@ export default function RuletaPage() {
       if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
       if (chatTimerRef.current) clearTimeout(chatTimerRef.current);
     };
-  }, [user, hasNotificationPermission]);
+  }, [user]);
 
   useEffect(() => { window.localStorage.setItem("rouletteTotalWagered", String(totalWagered)); }, [totalWagered]);
   useEffect(() => { window.localStorage.setItem("rouletteRoundsPlayed", String(roundsPlayed)); }, [roundsPlayed]);
@@ -244,9 +273,17 @@ export default function RuletaPage() {
 
   const getBetAmount = (key: string) => bets[key]?.amount ?? 0;
 
+  /**
+   * Colocar una ficha ya **no** mueve el saldo.
+   *
+   * Las fichas del tapete son una intención, no un cargo: el dinero sale de la
+   * cuenta una sola vez, cuando el servidor abre la ronda. Antes cada `addBet`
+   * restaba del saldo local y cada `undo` lo devolvía, así que un fallo a mitad
+   * dejaba el saldo descuadrado sin que nada lo detectara.
+   */
   const addBet = (draft: BetDraft) => {
-    if (spinning) { setStatusMessage("Espera a que termine el giro."); return; }
-    if (balance < selectedChip) { setStatusMessage("Saldo insuficiente para colocar esa ficha."); return; }
+    if (spinning || apostando) { setStatusMessage("Espera a que termine el giro."); return; }
+    if (saldo < totalBet + selectedChip) { setStatusMessage("Saldo insuficiente para colocar esa ficha."); return; }
 
     setBets((previous) => {
       const current = previous[draft.key];
@@ -254,14 +291,12 @@ export default function RuletaPage() {
     });
 
     setBetActions((previous) => [...previous, { placements: [{ key: draft.key, amount: selectedChip }] }]);
-    setBalance((previous) => roundMoney(previous - selectedChip));
     setStatusMessage(`Apuesta de ${currency.format(selectedChip)} en ${draft.label}.`);
   };
 
   const undoLastBet = () => {
-    if (spinning || betActions.length === 0) return;
+    if (spinning || apostando || betActions.length === 0) return;
     const lastAction = betActions[betActions.length - 1];
-    const refund = lastAction.placements.reduce((sum, placement) => sum + placement.amount, 0);
 
     setBets((previous) => {
       const next = { ...previous };
@@ -269,28 +304,26 @@ export default function RuletaPage() {
         const current = next[placement.key];
         if (!current) continue;
         const newAmount = current.amount - placement.amount;
-        if (newAmount <= 0) { delete next[placement.key]; } 
+        if (newAmount <= 0) { delete next[placement.key]; }
         else { next[placement.key] = { ...current, amount: newAmount }; }
       }
       return next;
     });
 
     setBetActions((previous) => previous.slice(0, -1));
-    setBalance((previous) => roundMoney(previous + refund));
     setStatusMessage("Se deshizo la última acción.");
   };
 
   const clearBets = () => {
-    if (spinning || totalBet === 0) return;
-    setBalance((previous) => roundMoney(previous + totalBet));
+    if (spinning || apostando || totalBet === 0) return;
     setBets({});
     setBetActions([]);
     setStatusMessage("Todas las apuestas fueron retiradas.");
   };
 
   const doubleBets = () => {
-    if (spinning || totalBet === 0) return;
-    if (balance < totalBet) { setStatusMessage("No tienes saldo suficiente para doblar."); return; }
+    if (spinning || apostando || totalBet === 0) return;
+    if (saldo < totalBet * 2) { setStatusMessage("No tienes saldo suficiente para doblar."); return; }
 
     const placements = currentBets.map((bet) => ({ key: bet.key, amount: bet.amount }));
     setBets((previous) => {
@@ -300,70 +333,92 @@ export default function RuletaPage() {
     });
 
     setBetActions((previous) => [...previous, { placements }]);
-    setBalance((previous) => roundMoney(previous - totalBet));
     setStatusMessage("Tus apuestas se duplicaron.");
   };
 
-  const spin = () => {
-    if (spinning) return;
+  /**
+   * Girar.
+   *
+   * El orden es el que cambia todo: **primero se pide la ronda al servidor** y
+   * solo cuando responde empieza la animación, que se calcula para parar en el
+   * número que ya salió. Antes era al revés —el cliente sorteaba, animaba y se
+   * acreditaba a sí mismo el premio—, y por eso el resultado era manipulable
+   * desde las herramientas del navegador y no quedaba nada auditable después.
+   *
+   * La rueda tarda lo mismo en girar; lo que cambia es quién decidió dónde para.
+   */
+  const spin = async () => {
+    if (spinning || apostando) return;
     if (totalBet === 0) { setStatusMessage("Coloca al menos una apuesta antes de girar."); return; }
 
-    const result = secureRouletteNumber();
+    limpiarError();
+    setStatusMessage("Registrando tu apuesta…");
+
+    const apuestas = currentBets.map((bet) => ({
+      tipo: TIPO_EN_LA_API[bet.kind],
+      valor: bet.value ?? null,
+      monto_centavos: aCentavos(bet.amount),
+    }));
+
+    const stakeSnapshot = totalBet;
+    const nueva = await apostar({ apuestas });
+
+    if (!nueva) {
+      // El hook ya dejó el motivo en `errorDeRonda`; el saldo no se tocó.
+      setStatusMessage("No se pudo registrar la apuesta.");
+      return;
+    }
+
+    const desenlace = nueva.desenlace as { numero: number } | null;
+    const result = desenlace?.numero ?? 0;
+    const totalReturn = nueva.premio_mxn;
+    const netResult = nueva.neto_mxn;
+
     const resultIndex = ROULETTE_ORDER.indexOf(result);
-    
-    const extraSpins = 5; 
+    const extraSpins = 5;
     const newWheelRotation = wheelRotation + (360 * extraSpins);
-    const targetAngle = resultIndex * (360 / 37); 
+    const targetAngle = resultIndex * (360 / 37);
     const finalAbsoluteAngle = newWheelRotation + targetAngle;
-    
+
     const currentBallMod = ballRotation % 360;
     const targetMod = finalAbsoluteAngle % 360;
     let diff = targetMod - currentBallMod;
-    if (diff > 0) diff -= 360; 
-    const newBallRotation = ballRotation - (360 * 6) + diff; 
-
-    const betsSnapshot = currentBets.map((bet) => ({ ...bet }));
-    const stakeSnapshot = totalBet;
+    if (diff > 0) diff -= 360;
+    const newBallRotation = ballRotation - (360 * 6) + diff;
 
     setSpinning(true);
     setLastResult(null);
     setStatusMessage("La ruleta está girando...");
-    
     setWheelRotation(newWheelRotation);
     setBallRotation(newBallRotation);
-    
-    setTotalWagered((previous) => roundMoney(previous + stakeSnapshot));
+
+    setTotalWagered((previous) => previous + stakeSnapshot);
     setRoundsPlayed((previous) => previous + 1);
 
     // La telemetría va en lote (`POST /eventos`), no una petición por giro.
-    registrarEvento("giro_ruleta", { apuesta: stakeSnapshot, apuestas: betsSnapshot.length }, juegoId);
+    registrarEvento("giro_ruleta", { apuesta: stakeSnapshot, apuestas: apuestas.length }, juegoId);
 
     if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
 
+    // La espera es solo la animación: el dinero ya se movió y el número ya está
+    // decidido y firmado en el comprobante de la ronda.
     resultTimerRef.current = window.setTimeout(() => {
-      const totalReturn = betsSnapshot.reduce((sum, bet) => sum + payoutForBet(bet, result), 0);
-      const netResult = totalReturn - stakeSnapshot;
-
-      setBalance((previous) => roundMoney(previous + totalReturn));
       setRecentNumbers((previous) => [result, ...previous].slice(0, 20));
       setLastResult(result);
 
-      // Progreso parcial del resultado; el cierre irreversible se hace al salir.
-      void registrarProgreso(Math.max(0, Math.round(totalReturn)), {
+      void registrarProgreso(Math.max(0, Math.round(nueva.premio_centavos / 100)), {
         rondas: roundsPlayed + 1,
         ultimo_numero: result,
       });
+
       setBets({});
       setBetActions([]);
       setSpinning(false);
 
       if (totalReturn > 0) {
         setStatusMessage(`Salió el ${result}. Premio: ${currency.format(totalReturn)}. Resultado neto: ${netResult >= 0 ? "+" : ""}${currency.format(netResult)}.`);
-        
-        // <-- Notificación en la campanita del Navbar -->
         addNotification(`¡Felicidades! Ganaste ${currency.format(totalReturn)} en la Ruleta (Salió el ${result}).`);
 
-        // <-- Notificación nativa del sistema operativo -->
         if ("Notification" in window && Notification.permission === "granted") {
           new Notification("¡Premio en Ruleta!", {
             body: `¡Felicidades! Has ganado ${currency.format(totalReturn)} en la Ruleta.`,
@@ -431,34 +486,66 @@ export default function RuletaPage() {
     </button>
   );
 
-  if (!user) return <div className="h-screen bg-[#05050A]"></div>;
+  // `resolviendo` es "todavía no sé si hay sesión": pintar el esqueleto en vez
+  // de redirigir es lo que evita perder la sesión al refrescar.
+  if (resolviendo) return <div className="h-screen bg-[#05050A]" />;
+  if (!user) return <div className="h-screen bg-[#05050A]" />;
 
   return (
     <div className="relative flex flex-col min-h-screen bg-[#05050A] text-white font-sans">
-      
-      {!hasNotificationPermission && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#05050A]/85 backdrop-blur-md">
-          <div className="bg-[#0B0E14] border border-[#8A2BE2]/50 p-8 rounded-3xl shadow-[0_0_50px_rgba(138,43,226,0.2)] flex flex-col items-center max-w-md text-center mx-4 animate-in zoom-in-95 duration-300">
-            <div className="w-20 h-20 bg-[#1E1133] rounded-full flex items-center justify-center mb-6 border border-[#8A2BE2]/30 shadow-[0_0_30px_rgba(138,43,226,0.3)]">
-              <Bell className="text-[#D4AF37]" size={36} />
+
+      {/*
+        Invitación, no barrera.
+        El banner de consentimiento del sitio promete que rechazar no penaliza y
+        que se puede seguir jugando igual. Esta mesa lo contradecía: sin
+        notificaciones no dejaba apostar. Ahora se ofrece, se explica para qué
+        sirve y se puede seguir de largo — que es lo que ya decía el aviso.
+      */}
+      {mostrarInvitacion && permisoNotificaciones === "prompt" && (
+        <div className="fixed bottom-4 right-4 z-[90] max-w-sm animate-in slide-in-from-bottom-4 duration-300">
+          <div className="bg-[#0B0E14] border border-[#8A2BE2]/50 p-5 rounded-2xl shadow-[0_0_40px_rgba(138,43,226,0.25)] flex gap-4">
+            <div className="w-10 h-10 shrink-0 bg-[#1E1133] rounded-full flex items-center justify-center border border-[#8A2BE2]/30">
+              <Bell className="text-[#D4AF37]" size={20} />
             </div>
-            <h2 className="text-2xl font-bold text-white mb-3">Permiso Requerido</h2>
-            <p className="text-gray-400 text-sm mb-8 leading-relaxed">
-              Para garantizar la seguridad de tus apuestas y notificarte sobre giros o premios especiales, la mesa de Ruleta requiere acceso a tus notificaciones del sistema.
-            </p>
-            <button
-              onClick={requestNotificationPermission}
-              className="bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-bold py-3.5 px-8 rounded-xl transition-all shadow-[0_4px_15px_rgba(212,175,55,0.2)] hover:shadow-[0_6px_20px_rgba(212,175,55,0.3)] w-full tracking-widest uppercase text-sm"
-            >
-              PERMITIR Y ENTRAR
-            </button>
-            <button
-              onClick={() => router.push("/juegos")}
-              className="mt-6 text-gray-500 hover:text-white text-xs font-bold uppercase tracking-widest transition-colors"
-            >
-              VOLVER AL LOBBY
-            </button>
+            <div className="flex-1">
+              <h2 className="text-sm font-bold text-white mb-1">¿Te avisamos de los premios?</h2>
+              <p className="text-gray-400 text-xs mb-4 leading-relaxed">
+                Podemos notificarte cuando ganes, aunque tengas la pestaña en segundo plano.
+                <strong className="text-gray-300"> No hace falta para jugar</strong>: la mesa ya está abierta.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => void solicitarNotificaciones()}
+                  className="bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-bold py-2 px-4 rounded-lg transition-all tracking-widest uppercase text-[10px]"
+                >
+                  Permitir
+                </button>
+                <button
+                  onClick={() => setMostrarInvitacion(false)}
+                  className="text-gray-500 hover:text-white text-[10px] font-bold uppercase tracking-widest transition-colors px-3"
+                >
+                  Ahora no
+                </button>
+              </div>
+            </div>
           </div>
+        </div>
+      )}
+
+      {/* El fallo de telemetría se informa como aviso; nunca cierra la mesa. */}
+      {avisoDePermiso && (
+        <div className="shrink-0 bg-amber-950/40 border-b border-amber-500/30 px-4 py-2 text-[11px] text-amber-200">
+          El navegador respondió tu permiso, pero el laboratorio no pudo registrarlo: {avisoDePermiso}
+        </div>
+      )}
+
+      {/* Errores de la apuesta (saldo insuficiente, mesa cerrada…). */}
+      {errorDeRonda && (
+        <div className="shrink-0 bg-red-950/40 border-b border-red-500/30 px-4 py-2 text-[11px] text-red-200 flex items-center justify-between gap-4">
+          <span>{errorDeRonda}</span>
+          <button onClick={limpiarError} className="text-red-300 hover:text-white font-bold uppercase tracking-widest">
+            Cerrar
+          </button>
         </div>
       )}
 
@@ -722,7 +809,7 @@ export default function RuletaPage() {
 
       <footer className="min-h-24 bg-[#0B0E14] border-t border-white/5 flex flex-col lg:flex-row items-center justify-between gap-4 px-4 lg:px-6 py-3 shrink-0 relative z-20">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-2">
-          <div><p className="text-[10px] text-gray-500 uppercase tracking-widest mb-0.5">Saldo</p><p className="font-bold text-white">{currency.format(balance)}</p></div>
+          <div><p className="text-[10px] text-gray-500 uppercase tracking-widest mb-0.5">Saldo</p><p className="font-bold text-white">{currency.format(saldo)}</p></div>
           <div><p className="text-[10px] text-gray-500 uppercase tracking-widest mb-0.5">Apuesta actual</p><p className="font-bold text-white">{currency.format(totalBet)}</p></div>
           <div><p className="text-[10px] text-gray-500 uppercase tracking-widest mb-0.5">Total apostado</p><p className="font-bold text-[#D4AF37]">{currency.format(totalWagered)}</p></div>
           <div><p className="text-[10px] text-gray-500 uppercase tracking-widest mb-0.5">Rondas jugadas</p><p className="font-bold text-white">{roundsPlayed}</p></div>
@@ -743,10 +830,10 @@ export default function RuletaPage() {
         </div>
 
         <div className="flex items-center gap-2 lg:gap-3">
-          <button type="button" onClick={undoLastBet} disabled={spinning || betActions.length === 0} className="flex flex-col items-center justify-center gap-1 text-gray-400 hover:text-white disabled:opacity-30 transition-colors px-2"><RotateCcw size={18} /> <span className="text-[9px] uppercase tracking-wider">Deshacer</span></button>
-          <button type="button" onClick={doubleBets} disabled={spinning || totalBet === 0} className="flex flex-col items-center justify-center gap-1 text-gray-400 hover:text-white disabled:opacity-30 transition-colors px-2"><Copy size={18} /> <span className="text-[9px] uppercase tracking-wider">Doblar</span></button>
-          <button type="button" onClick={clearBets} disabled={spinning || totalBet === 0} className="flex flex-col items-center justify-center gap-1 text-gray-400 hover:text-white disabled:opacity-30 transition-colors px-2"><XCircle size={18} /> <span className="text-[9px] uppercase tracking-wider">Borrar</span></button>
-          <button type="button" onClick={spin} disabled={spinning || totalBet === 0} className="ml-1 bg-green-700 hover:bg-green-600 disabled:bg-gray-700 disabled:border-gray-600 disabled:shadow-none border border-green-500 text-white flex items-center gap-2 px-5 lg:px-8 py-3 rounded-xl font-bold transition-colors shadow-[0_0_20px_rgba(21,128,61,0.4)]"><Play size={18} className={spinning ? "animate-pulse" : ""} /> {spinning ? "GIRANDO..." : "GIRAR"}</button>
+          <button type="button" onClick={undoLastBet} disabled={spinning || apostando || betActions.length === 0} className="flex flex-col items-center justify-center gap-1 text-gray-400 hover:text-white disabled:opacity-30 transition-colors px-2"><RotateCcw size={18} /> <span className="text-[9px] uppercase tracking-wider">Deshacer</span></button>
+          <button type="button" onClick={doubleBets} disabled={spinning || apostando || totalBet === 0} className="flex flex-col items-center justify-center gap-1 text-gray-400 hover:text-white disabled:opacity-30 transition-colors px-2"><Copy size={18} /> <span className="text-[9px] uppercase tracking-wider">Doblar</span></button>
+          <button type="button" onClick={clearBets} disabled={spinning || apostando || totalBet === 0} className="flex flex-col items-center justify-center gap-1 text-gray-400 hover:text-white disabled:opacity-30 transition-colors px-2"><XCircle size={18} /> <span className="text-[9px] uppercase tracking-wider">Borrar</span></button>
+          <button type="button" onClick={() => void spin()} disabled={spinning || apostando || totalBet === 0} className="ml-1 bg-green-700 hover:bg-green-600 disabled:bg-gray-700 disabled:border-gray-600 disabled:shadow-none border border-green-500 text-white flex items-center gap-2 px-5 lg:px-8 py-3 rounded-xl font-bold transition-colors shadow-[0_0_20px_rgba(21,128,61,0.4)]"><Play size={18} className={spinning ? "animate-pulse" : ""} /> {apostando ? "REGISTRANDO..." : spinning ? "GIRANDO..." : "GIRAR"}</button>
         </div>
       </footer>
     </div>

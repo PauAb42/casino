@@ -32,7 +32,7 @@ interface AuthState {
   error: string | null;
   politica: PoliticaDeContrasenaUi | null;
 
-  login: (correo: string, contrasena: string) => Promise<boolean>;
+  login: (correo: string, contrasena: string, recordarme?: boolean) => Promise<boolean>;
   registrar: (datos: {
     alias: string;
     correo: string;
@@ -65,10 +65,15 @@ export const useAuthStore = create<AuthState>((set) => ({
   error: null,
   politica: null,
 
-  login: async (correo, contrasena) => {
+  /**
+   * @param recordarme Emite un token de larga duracion y una cookie que
+   * sobrevive al cierre del navegador. No es una preferencia de la interfaz:
+   * cambia la credencial que emite el backend, y por eso viaja en la peticion.
+   */
+  login: async (correo, contrasena, recordarme = false) => {
     set({ isLoading: true, error: null });
     try {
-      const datos = await api.auth.login({ correo, contrasena });
+      const datos = await api.auth.login({ correo, contrasena, recordarme });
       guardarToken(datos.token);
       set({
         ...aplicarIdentidad({ participante: datos.participante, cuenta: datos.cuenta }),

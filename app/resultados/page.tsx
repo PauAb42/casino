@@ -1,25 +1,28 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import {
   Calendar, ChevronDown, Gamepad2, Coins, Trophy,
-  TrendingUp, Star, ChevronRight, CircleDashed,
+  TrendingUp, Star, CircleDashed,
   RefreshCw
 } from "lucide-react";
-import { useAuthStore } from "@/lib/authStore";
 import { useCatalogoStore } from "@/lib/catalogoStore";
-import { useLabStore } from "@/lib/labStore";
+import { useSesionRequerida } from "@/lib/useSesionRequerida";
 import { api } from "@/lib/api";
-import type { InventarioDeResultados } from "@/lib/api";
+import type { RondaDeJuego } from "@/lib/api";
 
 /**
- * Historial de partidas de la sesión de laboratorio.
+ * Historial de apuestas.
  *
- * `GET /resultados?sesion_id=` devuelve una fila por juego —`resultados` es único
- * por `(sesion_id, juego_id)`, un juego se juega una vez por sesión— con su
- * puntaje, si quedó completado y las métricas que la sala fue guardando. No hay
- * apuesta por ronda que listar: el backend modela el recorrido, no la caja.
+ * Esta pantalla leía `GET /resultados`, que devuelve **una fila por juego y
+ * sesión** —el resumen del recorrido para el estudio— y la presentaba como si
+ * fueran rondas: llamaba "Rondas jugadas" a un conteo de juegos distintos y
+ * formateaba el puntaje como pesos, aunque cada sala mandaba una magnitud
+ * distinta (puntuación, retorno o premio). Las cifras eran semánticamente
+ * incorrectas y no comparables entre sí.
+ *
+ * Ahora lee `GET /rondas`, que sí es el historial financiero: una fila por
+ * apuesta, con su importe, su premio y su neto, todo en la misma unidad.
  */
 
 const formatMoney = (amount: number) => {
@@ -42,13 +45,11 @@ const formatDate = (isoString: string) => {
 };
 
 export default function ResultadosPage() {
-  const router = useRouter();
-  const { user, estado } = useAuthStore();
-  const sesionId = useLabStore((s) => s.sesionId);
+  const { user, resolviendo } = useSesionRequerida();
   const juegosPorSlug = useCatalogoStore((s) => s.porSlug);
   const cargarCatalogo = useCatalogoStore((s) => s.cargar);
 
-  const [inventario, setInventario] = useState<InventarioDeResultados | null>(null);
+  const [rondas, setRondas] = useState<RondaDeJuego[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,22 +59,25 @@ export default function ResultadosPage() {
   const [endDate, setEndDate] = useState("");
 
   useEffect(() => {
-    if (estado === "anonimo") router.replace("/login");
-  }, [estado, router]);
-
-  useEffect(() => {
     void cargarCatalogo();
   }, [cargarCatalogo]);
 
+  /**
+   * El historial es de la **cuenta**, no de la sesión de laboratorio.
+   *
+   * Las rondas cuelgan de la cuenta a propósito: el dinero es de la persona, no
+   * de la visita. Antes esta pantalla dependía de `sesionId` y se quedaba vacía
+   * mientras la sesión no estuviera abierta, aunque hubiera partidas de sobra.
+   */
   useEffect(() => {
-    if (!sesionId) return;
+    if (!user) return;
     let vivo = true;
 
     (async () => {
       setCargando(true);
       try {
-        const datos = await api.resultados.listar(sesionId);
-        if (vivo) setInventario(datos);
+        const datos = await api.rondas.listar({ limite: 200 });
+        if (vivo) setRondas(datos.rondas);
       } catch (err) {
         if (vivo) setError(err instanceof Error ? err.message : "No se pudieron cargar tus resultados");
       } finally {
@@ -84,9 +88,9 @@ export default function ResultadosPage() {
     return () => {
       vivo = false;
     };
-  }, [sesionId]);
+  }, [user]);
 
-  // Nombre del juego por id: el resultado solo trae `juego_id`.
+  // Nombre del juego por id: la ronda solo trae `juego_id`.
   const nombrePorId = useMemo(() => {
     const mapa: Record<string, string> = {};
     for (const juego of Object.values(juegosPorSlug)) mapa[juego.id] = juego.nombre;
@@ -94,24 +98,30 @@ export default function ResultadosPage() {
   }, [juegosPorSlug]);
 
   const filteredResults = useMemo(() => {
-    const filas = inventario?.resultados ?? [];
-    return filas.filter((fila) => {
-      const fecha = new Date(fila.iniciado_at);
+    return rondas.filter((fila) => {
+      const fecha = new Date(fila.creado_at);
       if (startDate && fecha < new Date(startDate + "T00:00:00")) return false;
       if (endDate && fecha > new Date(endDate + "T23:59:59")) return false;
       if (selectedGame !== "Todos" && nombrePorId[fila.juego_id] !== selectedGame) return false;
       return true;
     });
-  }, [inventario, selectedGame, startDate, endDate, nombrePorId]);
+  }, [rondas, selectedGame, startDate, endDate, nombrePorId]);
 
-  // El resumen viene del backend; los filtros solo recortan la tabla.
+  /**
+   * Los totales de las tarjetas.
+   *
+   * Se recalculan sobre las filas filtradas para que el resumen y la tabla digan
+   * lo mismo. Todo está en la misma unidad —pesos apostados y pesos devueltos—,
+   * así que sumar y comparar ahora significa algo.
+   */
   const rondasJugadas = filteredResults.length;
-  const completados = filteredResults.filter((r) => r.completado).length;
-  const puntajeTotal = filteredResults.reduce((acc, r) => acc + r.puntaje, 0);
-  const mayorPuntaje = filteredResults.length > 0 ? Math.max(...filteredResults.map((r) => r.puntaje)) : 0;
-  const enCurso = rondasJugadas - completados;
+  const apostado = filteredResults.reduce((acc, r) => acc + r.apuesta_mxn, 0);
+  const retornado = filteredResults.reduce((acc, r) => acc + r.premio_mxn, 0);
+  const neto = retornado - apostado;
+  const ganadas = filteredResults.filter((r) => r.premio_centavos > r.apuesta_centavos).length;
+  const mayorPremio = filteredResults.length > 0 ? Math.max(...filteredResults.map((r) => r.premio_mxn)) : 0;
 
-  if (!user) return <div className="min-h-screen bg-[#05050A]"></div>;
+  if (resolviendo || !user) return <div className="min-h-screen bg-[#05050A]" />;
 
   return (
     <div className="min-h-screen bg-[#080B12] text-white font-sans pb-20 selection:bg-[#8A2BE2]/30">
@@ -125,7 +135,8 @@ export default function ResultadosPage() {
               Resultados
             </h1>
             <p className="text-gray-400 text-sm">
-              Tus partidas de esta sesión de laboratorio, tal como quedaron registradas en el backend.
+              Una fila por apuesta, tal como quedó registrada en el backend. El comprobante permite
+              recalcular cada ronda y verificar que el resultado no se tocó después.
             </p>
           </div>
 
@@ -184,32 +195,34 @@ export default function ResultadosPage() {
           <div className="bg-[#0B1511] border border-[#22c55e]/30 rounded-xl p-4 flex items-center gap-3 sm:gap-4 shadow-lg overflow-hidden transition-all">
             <Coins size={32} className="text-[#22c55e] opacity-80 shrink-0" />
             <div className="min-w-0">
-              <p className="text-[9px] font-bold tracking-widest uppercase text-[#22c55e] mb-0.5 truncate">Puntaje Total</p>
-              <p className="text-lg xl:text-xl font-bold text-white truncate">{formatMoney(puntajeTotal)}</p>
+              <p className="text-[9px] font-bold tracking-widest uppercase text-[#22c55e] mb-0.5 truncate">Total Apostado</p>
+              <p className="text-lg xl:text-xl font-bold text-white truncate">{formatMoney(apostado)}</p>
             </div>
           </div>
 
           <div className="bg-[#17130B] border border-[#eab308]/30 rounded-xl p-4 flex items-center gap-3 sm:gap-4 shadow-lg overflow-hidden transition-all">
             <Trophy size={32} className="text-[#eab308] opacity-80 shrink-0" />
             <div className="min-w-0">
-              <p className="text-[9px] font-bold tracking-widest uppercase text-[#eab308] mb-0.5 truncate">Completados</p>
-              <p className="text-lg xl:text-xl font-bold text-white truncate">{completados}</p>
+              <p className="text-[9px] font-bold tracking-widest uppercase text-[#eab308] mb-0.5 truncate">Rondas Ganadas</p>
+              <p className="text-lg xl:text-xl font-bold text-white truncate">{ganadas}</p>
             </div>
           </div>
 
           <div className="bg-[#0B121A] border border-[#3b82f6]/30 rounded-xl p-4 flex items-center gap-3 sm:gap-4 shadow-lg overflow-hidden transition-all">
             <TrendingUp size={32} className="text-[#3b82f6] opacity-80 shrink-0" />
             <div className="min-w-0">
-              <p className="text-[9px] font-bold tracking-widest uppercase text-[#3b82f6] mb-0.5 truncate">En Curso</p>
-              <p className="text-lg xl:text-xl font-bold text-white truncate">{enCurso}</p>
+              <p className="text-[9px] font-bold tracking-widest uppercase text-[#3b82f6] mb-0.5 truncate">Resultado Neto</p>
+              <p className={`text-lg xl:text-xl font-bold truncate ${neto >= 0 ? "text-green-400" : "text-red-400"}`}>
+                {neto >= 0 ? "+" : ""}{formatMoney(neto)}
+              </p>
             </div>
           </div>
 
           <div className="bg-[#150B16] border border-[#d946ef]/30 rounded-xl p-4 flex items-center gap-3 sm:gap-4 shadow-lg overflow-hidden transition-all">
             <Star size={32} className="text-[#d946ef] opacity-80 shrink-0" />
             <div className="min-w-0">
-              <p className="text-[9px] font-bold tracking-widest uppercase text-[#d946ef] mb-0.5 truncate">Mayor Puntaje</p>
-              <p className="text-lg xl:text-xl font-bold text-white truncate">{formatMoney(mayorPuntaje)}</p>
+              <p className="text-[9px] font-bold tracking-widest uppercase text-[#d946ef] mb-0.5 truncate">Mayor Premio</p>
+              <p className="text-lg xl:text-xl font-bold text-white truncate">{formatMoney(mayorPremio)}</p>
             </div>
           </div>
 
@@ -225,13 +238,13 @@ export default function ResultadosPage() {
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead>
                 <tr className="border-b border-white/10 bg-[#131722]/50">
-                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Iniciado</th>
+                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Fecha</th>
                   <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Juego</th>
-                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Métricas</th>
-                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Puntaje</th>
+                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Apuesta</th>
+                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Premio</th>
+                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Neto</th>
                   <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Estado</th>
-                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Cerrado</th>
-                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]"></th>
+                  <th className="py-5 px-6 text-[11px] font-bold tracking-widest uppercase text-[#D4AF37]">Comprobante</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -245,54 +258,56 @@ export default function ResultadosPage() {
                     </td>
                   </tr>
                 ) : filteredResults.length > 0 ? (
-                  filteredResults.map((row) => {
-                    const metricas = Object.entries(row.metricas ?? {})
-                      .map(([clave, valor]) => `${clave}: ${String(valor)}`)
-                      .join(" · ");
-
-                    return (
-                      <tr key={row.id} className="hover:bg-white/[0.03] transition-colors group cursor-pointer">
-                        <td className="py-4 px-6 text-sm text-gray-400 whitespace-nowrap">
-                          {formatDate(row.iniciado_at)}
-                        </td>
-                        <td className="py-4 px-6">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded bg-[#131722] border border-white/10 flex items-center justify-center shrink-0">
-                              <Gamepad2 size={16} className="text-[#a855f7]" />
-                            </div>
-                            <span className="text-sm font-medium text-gray-200">
-                              {nombrePorId[row.juego_id] ?? "Juego del catálogo"}
-                            </span>
+                  filteredResults.map((row) => (
+                    <tr key={row.id} className="hover:bg-white/[0.03] transition-colors group">
+                      <td className="py-4 px-6 text-sm text-gray-400 whitespace-nowrap">
+                        {formatDate(row.creado_at)}
+                      </td>
+                      <td className="py-4 px-6">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded bg-[#131722] border border-white/10 flex items-center justify-center shrink-0">
+                            <Gamepad2 size={16} className="text-[#a855f7]" />
                           </div>
-                        </td>
-                        <td className="py-4 px-6 text-sm text-gray-300 max-w-[280px] truncate" title={metricas}>
-                          {metricas || "—"}
-                        </td>
-                        <td className="py-4 px-6 text-sm text-gray-200 font-mono">{row.puntaje}</td>
-                        <td className="py-4 px-6 text-sm">
-                          <span className={row.completado ? "text-green-500 font-medium" : "text-yellow-500 font-medium"}>
-                            {row.completado ? "Completado" : "En curso"}
+                          <span className="text-sm font-medium text-gray-200">
+                            {nombrePorId[row.juego_id] ?? "Juego del catálogo"}
                           </span>
-                        </td>
-                        <td className="py-4 px-6 text-sm text-gray-400 whitespace-nowrap">
-                          {row.completado_at ? formatDate(row.completado_at) : "—"}
-                        </td>
-                        <td className="py-4 px-6 text-right">
-                          <ChevronRight size={18} className="text-[#D4AF37] opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
-                        </td>
-                      </tr>
-                    );
-                  })
+                        </div>
+                      </td>
+                      <td className="py-4 px-6 text-sm text-gray-300 font-mono">{formatMoney(row.apuesta_mxn)}</td>
+                      <td className="py-4 px-6 text-sm text-gray-200 font-mono">
+                        {row.premio_mxn > 0 ? formatMoney(row.premio_mxn) : "—"}
+                      </td>
+                      <td className={`py-4 px-6 text-sm font-mono ${row.neto_mxn > 0 ? "text-green-400" : row.neto_mxn < 0 ? "text-red-400" : "text-gray-400"}`}>
+                        {row.neto_mxn > 0 ? "+" : ""}{formatMoney(row.neto_mxn)}
+                      </td>
+                      <td className="py-4 px-6 text-sm">
+                        <span className={
+                          row.estado === "resuelta" ? "text-green-500 font-medium"
+                          : row.estado === "abierta" ? "text-yellow-500 font-medium"
+                          : "text-gray-500 font-medium"
+                        }>
+                          {row.estado === "resuelta" ? "Resuelta" : row.estado === "abierta" ? "En curso" : "Anulada"}
+                        </span>
+                      </td>
+                      {/*
+                        El comprobante de juego justo. Con la semilla del
+                        servidor revelada, cualquiera puede recalcular la ronda y
+                        comprobar que el resultado no se reescribió después de
+                        ver la apuesta.
+                      */}
+                      <td className="py-4 px-6 text-[11px] text-gray-500 font-mono" title={row.equidad.como_verificar}>
+                        {row.equidad.semilla_servidor
+                          ? `${row.equidad.semilla_servidor_hash.slice(0, 10)}… · nonce ${row.equidad.nonce}`
+                          : "Sin revelar"}
+                      </td>
+                    </tr>
+                  ))
                 ) : (
                   <tr>
                     <td colSpan={7} className="py-16 text-center">
                       <div className="flex flex-col items-center justify-center text-gray-500">
                         <CircleDashed size={40} className="mb-4 opacity-30" />
-                        <p className="text-sm">
-                          {sesionId
-                            ? "Todavía no jugaste nada en esta sesión de laboratorio."
-                            : "Inicia sesión para abrir una sesión de laboratorio y registrar tus partidas."}
-                        </p>
+                        <p className="text-sm">Todavía no has jugado ninguna ronda.</p>
                       </div>
                     </td>
                   </tr>

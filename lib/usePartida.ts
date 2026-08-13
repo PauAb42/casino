@@ -104,6 +104,34 @@ export function usePartida(slug: string) {
     [resultado, slug],
   );
 
+  /**
+   * Cierre automático al salir de la sala.
+   *
+   * Las cinco salas registraban progreso y **ninguna llamaba a `completar()`**:
+   * la instantánea auditada tenía tres resultados y los tres en
+   * `completado = false`. Las sesiones quedaban abiertas para siempre y los
+   * informes no reflejaban un solo final de partida.
+   *
+   * Está aquí y no en cada página por un motivo concreto además de no repetirlo:
+   * hacerlo en la página con `useEffect(..., [completar])` **cierra la partida
+   * antes de tiempo**. `completar` es un `useCallback` que depende de
+   * `resultado`, así que cambia de identidad en cuanto se registra el primer
+   * progreso; React ejecuta entonces la limpieza del efecto anterior y la
+   * partida se completa a mitad del recorrido, dejando el resto del progreso
+   * rechazado con 422.
+   *
+   * El ref esquiva eso: guarda siempre la versión vigente y el efecto se monta
+   * una sola vez, así que la limpieza solo corre al desmontar de verdad.
+   */
+  const completarRef = useRef(completar);
+  completarRef.current = completar;
+
+  useEffect(() => {
+    return () => {
+      void completarRef.current();
+    };
+  }, []);
+
   return {
     juego: juego ?? null,
     juegoId: juego?.id ?? null,

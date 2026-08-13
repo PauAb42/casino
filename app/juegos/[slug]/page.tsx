@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Play, ShieldAlert, Maximize2, Settings, Check } from "lucide-react";
-import { useAuthStore } from "@/lib/authStore";
+import { useSesionRequerida } from "@/lib/useSesionRequerida";
 import { useCatalogoStore } from "@/lib/catalogoStore";
 import { usePartida } from "@/lib/usePartida";
 import { pedirPermiso } from "@/lib/permisosLab";
@@ -21,7 +21,7 @@ import { salaDe } from "@/lib/salas";
 export default function GameRoom() {
   const params = useParams();
   const router = useRouter();
-  const { user, estado } = useAuthStore();
+  const { user, resolviendo } = useSesionRequerida();
   const slug = params.slug as string;
 
   const cargarCatalogo = useCatalogoStore((s) => s.cargar);
@@ -38,11 +38,7 @@ export default function GameRoom() {
 
   // CADENERO: `desconocido` significa que GET /auth/yo sigue en vuelo, así que
   // no se expulsa a nadie hasta que el backend conteste.
-  useEffect(() => {
-    if (estado === "anonimo") router.replace("/login");
-  }, [estado, router]);
-
-  if (!user) return <div className="h-[calc(100vh-5rem)] bg-[#05050A]"></div>;
+  if (resolviendo || !user) return <div className="h-[calc(100vh-5rem)] bg-[#05050A]" />;
 
   const nombre = juego?.nombre ?? "Mesa privada";
 

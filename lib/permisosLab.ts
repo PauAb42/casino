@@ -11,13 +11,30 @@ import { useZeroTrustStore } from "./store";
  *
  * El ciclo del backend es de **dos pasos y no uno**, y aqui se respeta:
  *
- *   1. `POST /permisos` — el sitio *pidio* el permiso (antes de abrir el dialogo).
+ *   1. `POST /permisos` — el sitio *pidio* el permiso.
  *   2. `PATCH /permisos/:id/respuesta` — como respondio la persona, con el tiempo
  *      que tardo en decidir.
  *
  * Separarlo es lo que permite medir `ms_decision` y, sobre todo, detectar los
  * dialogos que quedan sin contestar: cerrar uno sin responder tambien es un dato.
  * Por eso el paso 1 ocurre siempre, incluso si el navegador no llega a abrir nada.
+ *
+ * ## Dos correcciones que estructuran este archivo
+ *
+ * **El paso 1 va en paralelo al dialogo, no antes.** Esperar la sesion de
+ * laboratorio y un POST antes de llamar a `getUserMedia` gastaba la activacion
+ * transitoria del clic, y varios navegadores exigen esa activacion para mostrar
+ * el dialogo. El resultado era que el navegador podia ignorarlo aunque la
+ * persona hubiera pulsado "Permitir". Ahora el dialogo se dispara en el mismo
+ * turno del clic y el registro viaja al lado; `ms_decision` se sigue midiendo
+ * igual porque el cronometro arranca al abrir el dialogo, no al registrarlo.
+ *
+ * **El permiso del navegador y el registro son dos condiciones distintas.**
+ * Antes se fundian en un solo `ok`, asi que si el navegador concedia y una
+ * peticion posterior fallaba, la UI lo mostraba como denegado y bloqueaba la
+ * sala. Ahora `ok` es exclusivamente lo que decidio la persona, y el fallo de
+ * telemetria viaja en `errorDeRegistro` como aviso. La telemetria no decide
+ * quien puede jugar.
  */
 
 /** El vocabulario de la UI no es el del backend: `camera` no existe alla. */
@@ -33,8 +50,25 @@ const TIPO_EN_LA_API: Record<PermissionKey, TipoPermiso | null> = {
 };
 
 export interface ResultadoDePermiso {
+  /**
+   * **Lo que respondio el navegador**, y solo eso.
+   *
+   * Antes este campo mezclaba dos cosas distintas: la decision de la persona en
+   * el dialogo del navegador y el exito de las tres o cuatro peticiones que el
+   * laboratorio hace alrededor. Si el navegador concedia y una peticion
+   * posterior fallaba, la UI lo convertia en "denegado" y bloqueaba la sala. Esa
+   * era la causa directa de conceder el permiso y aun asi no poder entrar.
+   *
+   * Ahora `ok` responde exactamente a "¿el navegador dijo que si?". El fallo de
+   * telemetria viaja aparte, en `errorDeRegistro`, y no bloquea nada.
+   */
   ok: boolean;
   detalle: string;
+  /**
+   * La telemetria fallo, pero el permiso del navegador sigue siendo el que dice
+   * `ok`. Se muestra como aviso, nunca como denegacion.
+   */
+  errorDeRegistro?: string;
   permiso?: Permiso;
   /** Informe "con permiso vs. sin permiso" cuando se concedio la ubicacion. */
   alcance?: AlcanceDeUbicacion;
@@ -154,148 +188,112 @@ async function ejercicioDeAlmacenamiento(sesionId: string, juegoId?: string | nu
 // Permisos con dialogo real
 // --------------------------------------------------------------------------
 
-async function dispararDialogo(
-  llave: PermissionKey,
-  permisoId: string,
-  opciones: OpcionesDePermiso,
-): Promise<ResultadoDePermiso> {
-  const inicio = performance.now();
-  const ms = () => Math.round(performance.now() - inicio);
+/** Lo que respondio el navegador, antes de que intervenga la telemetria. */
+interface DesenlaceDelDialogo {
+  estado: "concedido" | "denegado" | "ignorado";
+  ok: boolean;
+  detalle: string;
+  /** Solo en `location`, cuando se concedio. */
+  posicion?: GeolocationPosition;
+  /** Solo en `camera`/`microphone`, cuando se concedio. */
+  stream?: MediaStream;
+}
 
+/**
+ * Abre el dialogo real del navegador. **No hace ni una peticion de red.**
+ *
+ * Esa es toda la gracia de tenerlo separado. Varios navegadores solo muestran
+ * el dialogo si la llamada ocurre dentro de la activacion transitoria del clic,
+ * y esa activacion se pierde en cuanto se hace `await` de algo lento. La version
+ * anterior esperaba la sesion de laboratorio y un `POST /permisos` antes de
+ * llegar aqui, asi que el navegador podia ignorar el dialogo aunque la persona
+ * hubiera pulsado "Permitir".
+ *
+ * Ahora esto se dispara en el mismo turno que el clic y el registro viaja en
+ * paralelo.
+ */
+function abrirDialogoDelNavegador(llave: PermissionKey): Promise<DesenlaceDelDialogo> {
   switch (llave) {
     case "location": {
       if (!("geolocation" in navigator)) {
-        await api.permisos.responder(permisoId, { estado: "ignorado", ms_decision: ms() });
-        return { ok: false, detalle: "Geolocalizacion no disponible en este navegador." };
+        return Promise.resolve({
+          estado: "ignorado",
+          ok: false,
+          detalle: "Geolocalizacion no disponible en este navegador.",
+        });
       }
 
-      const posicion = await new Promise<GeolocationPosition | GeolocationPositionError>((resolver) => {
-        navigator.geolocation.getCurrentPosition(resolver, resolver, { timeout: 20_000 });
+      return new Promise<DesenlaceDelDialogo>((resolver) => {
+        navigator.geolocation.getCurrentPosition(
+          (posicion) => resolver({ estado: "concedido", ok: true, detalle: "", posicion }),
+          (error) =>
+            resolver({
+              // TIMEOUT es el dialogo que se quedo abierto sin respuesta: eso es
+              // `ignorado`, no `denegado`, y el laboratorio los cuenta aparte.
+              estado: error.code === error.TIMEOUT ? "ignorado" : "denegado",
+              ok: false,
+              detalle: `Permiso no concedido: ${error.message}`,
+            }),
+          { timeout: 20_000 },
+        );
       });
-      const msDecision = ms();
-
-      if ("code" in posicion) {
-        // TIMEOUT es el dialogo que se quedo abierto sin respuesta: eso es
-        // `ignorado`, no `denegado`, y el laboratorio los cuenta por separado.
-        const estado = posicion.code === posicion.TIMEOUT ? "ignorado" : "denegado";
-        const { permiso } = await api.permisos.responder(permisoId, { estado, ms_decision: msDecision });
-        return { ok: false, detalle: `Permiso no concedido: ${posicion.message}`, permiso };
-      }
-
-      const { permiso } = await api.permisos.responder(permisoId, {
-        estado: "concedido",
-        ms_decision: msDecision,
-      });
-
-      // Conceder entrega una llave, no un dato: cada lectura se registra aparte.
-      const lectura = await api.permisos.registrarUbicacion(permisoId, {
-        latitud: posicion.coords.latitude,
-        longitud: posicion.coords.longitude,
-        precision_m: posicion.coords.accuracy,
-        altitud_m: posicion.coords.altitude,
-        velocidad_ms: posicion.coords.speed,
-        zona_horaria: zonaHoraria(),
-      });
-
-      return {
-        ok: true,
-        detalle:
-          `Ubicacion obtenida con ${Math.round(lectura.lectura.precision_m)} m de precision. ` +
-          `El servidor no guardo tus coordenadas: solo una celda de ~${lectura.lo_que_se_guarda.celda_aproximada_m} m ` +
-          `y el hash de la posicion. ${lectura.alcance.comparacion.lectura}`,
-        permiso,
-        alcance: lectura.alcance,
-        lecturas: lectura.lecturas,
-      };
     }
 
     case "camera":
     case "microphone": {
       const pideVideo = llave === "camera";
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia(
-          pideVideo ? { video: true } : { audio: true },
-        );
-      } catch (error) {
-        const nombre = error instanceof DOMException ? error.name : "Error";
-        // Que no haya dispositivo no es una decision de la persona.
-        const estado = nombre === "NotAllowedError" ? "denegado" : "ignorado";
-        const msDecision = ms();
-        const { permiso } = await api.permisos.responder(permisoId, { estado, ms_decision: msDecision });
-        return {
-          ok: false,
-          detalle:
-            nombre === "NotAllowedError"
-              ? `Permiso de ${pideVideo ? "camara" : "microfono"} denegado.`
-              : `El navegador no pudo abrir el dispositivo (${nombre}).`,
-          permiso,
-        };
-      }
 
-      const msDecision = ms();
-      const { permiso } = await api.permisos.responder(permisoId, {
-        estado: "concedido",
-        ms_decision: msDecision,
-      });
-
-      // `pistas` es lo que devolvio getUserMedia, no lo que se pidio: un permiso
-      // de camara puede traer audio si se solicito en el mismo dialogo.
-      const pistas: PistaMedios[] = [];
-      if (stream.getVideoTracks().length) pistas.push("video");
-      if (stream.getAudioTracks().length) pistas.push("audio");
-
-      const etiqueta = stream.getTracks()[0]?.label || null;
-      const { activacion, indicador } = await api.medios.abrir({
-        permiso_id: permisoId,
-        pistas: pistas.length ? pistas : [pideVideo ? "video" : "audio"],
-        dispositivo: etiqueta,
-        dispositivos_visibles: await dispositivosVisibles(),
-      });
-
-      if (!opciones.mantenerAbierto) {
-        // `track.stop()` es lo unico que libera el dispositivo y apaga el
-        // indicador; silenciar no lo haria.
-        stream.getTracks().forEach((pista) => pista.stop());
-        await api.medios.cerrar(activacion.id).catch(() => undefined);
-        return {
+      return navigator.mediaDevices
+        .getUserMedia(pideVideo ? { video: true } : { audio: true })
+        .then((stream) => ({
+          estado: "concedido" as const,
           ok: true,
-          detalle: `Acceso concedido a "${etiqueta ?? "dispositivo sin nombre"}". Se cerro al instante con track.stop(), que es lo unico que apaga el indicador.`,
-          permiso,
-          activacionId: activacion.id,
-        };
-      }
+          detalle: "",
+          stream,
+        }))
+        .catch((error: unknown) => {
+          const nombre = error instanceof DOMException ? error.name : "Error";
 
-      guardarStream(activacion.id, stream);
-      return {
-        ok: true,
-        detalle: `Acceso concedido a "${etiqueta ?? "dispositivo sin nombre"}". ${indicador.donde_mirar}`,
-        permiso,
-        activacionId: activacion.id,
-      };
+          return {
+            // Que no haya dispositivo no es una decision de la persona.
+            estado: nombre === "NotAllowedError" ? ("denegado" as const) : ("ignorado" as const),
+            ok: false,
+            detalle:
+              nombre === "NotAllowedError"
+                ? `Permiso de ${pideVideo ? "camara" : "microfono"} denegado.`
+                : `El navegador no pudo abrir el dispositivo (${nombre}).`,
+          };
+        });
     }
 
     case "notifications": {
       if (!("Notification" in window)) {
-        await api.permisos.responder(permisoId, { estado: "ignorado", ms_decision: ms() });
-        return { ok: false, detalle: "Notificaciones no soportadas en este navegador." };
+        return Promise.resolve({
+          estado: "ignorado",
+          ok: false,
+          detalle: "Notificaciones no soportadas en este navegador.",
+        });
       }
 
-      const resultado = await Notification.requestPermission();
-      const msDecision = ms();
-      // "default" es el dialogo que se cerro sin contestar.
-      const estado = resultado === "granted" ? "concedido" : resultado === "denied" ? "denegado" : "ignorado";
-      const { permiso } = await api.permisos.responder(permisoId, { estado, ms_decision: msDecision });
-
-      return {
+      return Notification.requestPermission().then((resultado) => ({
+        // "default" es el dialogo que se cerro sin contestar.
+        estado:
+          resultado === "granted"
+            ? ("concedido" as const)
+            : resultado === "denied"
+              ? ("denegado" as const)
+              : ("ignorado" as const),
         ok: resultado === "granted",
-        detalle: `El navegador respondio "${resultado}" en ${msDecision} ms.`,
-        permiso,
-      };
+        detalle: `El navegador respondio "${resultado}".`,
+      }));
     }
 
     default:
-      return { ok: false, detalle: "Este permiso no abre un dialogo del navegador." };
+      return Promise.resolve({
+        estado: "ignorado",
+        ok: false,
+        detalle: "Este permiso no abre un dialogo del navegador.",
+      });
   }
 }
 
@@ -309,46 +307,240 @@ export async function pedirPermiso(
   llave: PermissionKey,
   opciones: OpcionesDePermiso = {},
 ): Promise<ResultadoDePermiso> {
-  const sesionId = await useLabStore.getState().asegurarSesion();
-  if (!sesionId) {
-    const detalle = "No hay una sesion de laboratorio abierta. Inicia sesion para empezar el recorrido.";
-    sincronizarUi(llave, false, detalle);
-    return { ok: false, detalle };
-  }
-
   const tipo = TIPO_EN_LA_API[llave];
 
-  let resultado: ResultadoDePermiso;
+  // Cookies y Web Storage no abren dialogo, asi que aqui si se puede esperar a
+  // la sesion antes de nada: no hay activacion transitoria que perder.
   if (tipo === null) {
-    resultado =
+    const sesionId = await useLabStore.getState().asegurarSesion();
+
+    if (!sesionId) {
+      const detalle = "No hay una sesion de laboratorio abierta. Inicia sesion para empezar el recorrido.";
+      sincronizarUi(llave, false, detalle);
+      return { ok: false, detalle };
+    }
+
+    const resultado =
       llave === "cookies"
         ? await ejercicioDeCookies(sesionId, opciones.juegoId)
         : await ejercicioDeAlmacenamiento(sesionId, opciones.juegoId);
-  } else {
-    try {
-      // Paso 1: queda registrado que el sitio pidio el permiso, respondas o no.
-      const { permiso } = await api.permisos.solicitar({
-        sesion_id: sesionId,
-        juego_id: opciones.juegoId ?? null,
-        tipo,
-      });
-      resultado = await dispararDialogo(llave, permiso.id, opciones);
-    } catch (error) {
-      resultado = {
-        ok: false,
-        detalle: error instanceof ApiError ? error.message : "No se pudo registrar el permiso",
-      };
-    }
+
+    sincronizarUi(llave, resultado.ok, resultado.detalle);
+    registrarEvento("permiso_respondido", { permiso: llave, concedido: resultado.ok }, opciones.juegoId ?? null);
+    return resultado;
   }
+
+  // 1. El dialogo se abre YA, en el mismo turno que el clic. Nada de red antes.
+  const inicio = performance.now();
+  const dialogo = abrirDialogoDelNavegador(llave);
+
+  // 2. El registro (paso 1 del backend) viaja en paralelo. Sigue ocurriendo
+  //    siempre —tambien si el navegador no llega a abrir nada—, que es lo que
+  //    permite contar los dialogos que quedan sin contestar.
+  const registro = registrarSolicitud(tipo, opciones);
+
+  const desenlace = await dialogo;
+  const msDecision = Math.round(performance.now() - inicio);
+
+  // 3. Paso 2 del backend y, si hubo stream, la activacion de medios. Todo esto
+  //    es telemetria: puede fallar entero sin cambiar lo que decidio la persona.
+  const registrado = await reportarDesenlace({
+    llave,
+    registro,
+    desenlace,
+    msDecision,
+    opciones,
+  });
+
+  const resultado: ResultadoDePermiso = {
+    // `ok` es lo que dijo el navegador. Ni mas ni menos: aqui es donde antes se
+    // colaba el fallo de red y se convertia en "permiso denegado".
+    ok: desenlace.ok,
+    detalle: registrado.detalle || desenlace.detalle,
+    errorDeRegistro: registrado.errorDeRegistro,
+    permiso: registrado.permiso,
+    alcance: registrado.alcance,
+    activacionId: registrado.activacionId,
+    lecturas: registrado.lecturas,
+  };
 
   sincronizarUi(llave, resultado.ok, resultado.detalle);
   registrarEvento(
     "permiso_respondido",
-    { permiso: llave, concedido: resultado.ok, ms_decision: resultado.permiso?.ms_decision ?? null },
+    {
+      permiso: llave,
+      concedido: resultado.ok,
+      ms_decision: msDecision,
+      registro_fallido: Boolean(resultado.errorDeRegistro),
+    },
     opciones.juegoId ?? null,
   );
 
   return resultado;
+}
+
+/**
+ * Paso 1 del backend: "el sitio pidio este permiso".
+ *
+ * Devuelve `null` en vez de lanzar. Que no se pueda registrar la solicitud es un
+ * problema de telemetria, y la telemetria no decide si se puede jugar.
+ */
+async function registrarSolicitud(
+  tipo: TipoPermiso,
+  opciones: OpcionesDePermiso,
+): Promise<{ permiso: Permiso } | { error: string }> {
+  try {
+    const sesionId = await useLabStore.getState().asegurarSesion();
+
+    if (!sesionId) {
+      return { error: "No hay una sesion de laboratorio abierta: la decision no quedo registrada." };
+    }
+
+    return await api.permisos.solicitar({
+      sesion_id: sesionId,
+      // Se resuelve aqui y no en el render anterior: el catalogo puede haber
+      // terminado de cargar durante el dialogo, y con el id viejo el permiso se
+      // guardaria con `juego_id` nulo y se perderia la trazabilidad.
+      juego_id: opciones.juegoId ?? null,
+      tipo,
+    });
+  } catch (error) {
+    return { error: error instanceof ApiError ? error.message : "No se pudo registrar el permiso" };
+  }
+}
+
+/** Todo lo que ocurre despues del dialogo. Su fallo nunca cambia `ok`. */
+async function reportarDesenlace({
+  llave,
+  registro,
+  desenlace,
+  msDecision,
+  opciones,
+}: {
+  llave: PermissionKey;
+  registro: Promise<{ permiso: Permiso } | { error: string }>;
+  desenlace: DesenlaceDelDialogo;
+  msDecision: number;
+  opciones: OpcionesDePermiso;
+}): Promise<{
+  detalle: string;
+  errorDeRegistro?: string;
+  permiso?: Permiso;
+  alcance?: AlcanceDeUbicacion;
+  activacionId?: string;
+  lecturas?: number;
+}> {
+  const solicitud = await registro;
+
+  if ("error" in solicitud) {
+    // El dispositivo pudo quedar abierto: si nadie va a usarlo, se libera. Un
+    // stream vivo sin activacion registrada es lo peor de los dos mundos.
+    if (desenlace.stream && !opciones.mantenerAbierto) {
+      desenlace.stream.getTracks().forEach((pista) => pista.stop());
+    }
+
+    return { detalle: desenlace.detalle, errorDeRegistro: solicitud.error };
+  }
+
+  const permisoId = solicitud.permiso.id;
+
+  try {
+    const { permiso } = await api.permisos.responder(permisoId, {
+      estado: desenlace.estado,
+      ms_decision: msDecision,
+    });
+
+    if (!desenlace.ok) {
+      return { detalle: desenlace.detalle, permiso };
+    }
+
+    if (desenlace.posicion) {
+      return { ...(await registrarUbicacionInicial(permisoId, desenlace.posicion)), permiso };
+    }
+
+    if (desenlace.stream) {
+      return { ...(await registrarActivacion(llave, permisoId, desenlace.stream, opciones)), permiso };
+    }
+
+    return { detalle: `${desenlace.detalle} Se registro en ${msDecision} ms.`, permiso };
+  } catch (error) {
+    if (desenlace.stream && !opciones.mantenerAbierto) {
+      desenlace.stream.getTracks().forEach((pista) => pista.stop());
+    }
+
+    return {
+      detalle: desenlace.detalle,
+      errorDeRegistro:
+        error instanceof ApiError
+          ? error.message
+          : "El permiso se concedio, pero no se pudo registrar en el laboratorio.",
+    };
+  }
+}
+
+/** Conceder entrega una llave, no un dato: cada lectura se registra aparte. */
+async function registrarUbicacionInicial(permisoId: string, posicion: GeolocationPosition) {
+  const lectura = await api.permisos.registrarUbicacion(permisoId, {
+    latitud: posicion.coords.latitude,
+    longitud: posicion.coords.longitude,
+    precision_m: posicion.coords.accuracy,
+    altitud_m: posicion.coords.altitude,
+    velocidad_ms: posicion.coords.speed,
+    zona_horaria: zonaHoraria(),
+  });
+
+  return {
+    detalle:
+      `Ubicacion obtenida con ${Math.round(lectura.lectura.precision_m)} m de precision. ` +
+      `El servidor no guardo tus coordenadas: solo una celda de ~${lectura.lo_que_se_guarda.celda_aproximada_m} m ` +
+      `y el hash de la posicion. ${lectura.alcance.comparacion.lectura}`,
+    alcance: lectura.alcance,
+    lecturas: lectura.lecturas,
+  };
+}
+
+/** Abre la activacion de medios y decide si el dispositivo se queda encendido. */
+async function registrarActivacion(
+  llave: PermissionKey,
+  permisoId: string,
+  stream: MediaStream,
+  opciones: OpcionesDePermiso,
+) {
+  // `pistas` es lo que devolvio getUserMedia, no lo que se pidio: un permiso de
+  // camara puede traer audio si se solicito en el mismo dialogo.
+  const pistas: PistaMedios[] = [];
+  if (stream.getVideoTracks().length) pistas.push("video");
+  if (stream.getAudioTracks().length) pistas.push("audio");
+
+  const etiqueta = stream.getTracks()[0]?.label || null;
+
+  const { activacion, indicador } = await api.medios.abrir({
+    permiso_id: permisoId,
+    pistas: pistas.length ? pistas : [llave === "camera" ? "video" : "audio"],
+    dispositivo: etiqueta,
+    dispositivos_visibles: await dispositivosVisibles(),
+  });
+
+  if (!opciones.mantenerAbierto) {
+    // `track.stop()` es lo unico que libera el dispositivo y apaga el indicador;
+    // silenciar no lo haria.
+    stream.getTracks().forEach((pista) => pista.stop());
+    await api.medios.cerrar(activacion.id).catch(() => undefined);
+
+    return {
+      detalle:
+        `Acceso concedido a "${etiqueta ?? "dispositivo sin nombre"}". Se cerro al instante con ` +
+        `track.stop(), que es lo unico que apaga el indicador.`,
+      activacionId: activacion.id,
+    };
+  }
+
+  guardarStream(activacion.id, stream);
+
+  return {
+    detalle: `Acceso concedido a "${etiqueta ?? "dispositivo sin nombre"}". ${indicador.donde_mirar}`,
+    activacionId: activacion.id,
+  };
 }
 
 /**
@@ -420,12 +612,57 @@ export async function silenciarMedios(activacionId: string, silenciada: boolean)
   await api.medios.silenciar(activacionId, silenciada).catch(() => undefined);
 }
 
-/** `track.stop()`: lo unico que apaga el indicador del navegador. */
-export async function cerrarMedios(activacionId: string): Promise<void> {
+/**
+ * `track.stop()`: lo unico que apaga el indicador del navegador.
+ *
+ * El orden importa y no es intercambiable: primero se apaga el dispositivo y
+ * despues se registra el cierre. Al reves, un fallo de red dejaria la camara
+ * encendida mientras la base dice que se cerro.
+ *
+ * Devuelve si el registro llego a grabarse. Antes esta funcion se tragaba el
+ * error en silencio, y por eso la instantanea auditada tenia nueve activaciones
+ * "activas" y ninguna finalizada: el dispositivo si se apagaba, pero el registro
+ * de privacidad se quedaba mintiendo.
+ */
+export async function cerrarMedios(activacionId: string): Promise<{ registrado: boolean; error?: string }> {
   const stream = streamsAbiertos.get(activacionId);
   stream?.getTracks().forEach((pista) => pista.stop());
   streamsAbiertos.delete(activacionId);
-  await api.medios.cerrar(activacionId).catch(() => undefined);
+
+  try {
+    await api.medios.cerrar(activacionId);
+    return { registrado: true };
+  } catch (error) {
+    return {
+      registrado: false,
+      error:
+        error instanceof ApiError
+          ? error.message
+          : "El dispositivo se libero, pero el cierre no quedo registrado.",
+    };
+  }
+}
+
+/**
+ * Cierra todo lo que siguiera abierto.
+ *
+ * Lo llaman el desmontaje de las salas que abren camara o microfono y el
+ * `pagehide` global. Sin esto, salir de la pagina sin pulsar "cerrar" dejaba la
+ * activacion abierta en el backend para siempre: el contador de segundos con
+ * acceso seguia corriendo contra una sesion que ya no existia.
+ *
+ * `sendBeacon` no sirve aqui porque el endpoint es un POST autenticado con
+ * cookie y cuerpo JSON; lo que si se puede es lanzar los cierres y no esperar.
+ */
+export async function cerrarTodosLosMedios(): Promise<void> {
+  const abiertos = Array.from(streamsAbiertos.keys());
+
+  await Promise.all(abiertos.map((activacionId) => cerrarMedios(activacionId)));
+}
+
+/** Cuantas activaciones siguen vivas en este cliente. */
+export function activacionesAbiertas(): string[] {
+  return Array.from(streamsAbiertos.keys());
 }
 
 /** "Lo note": cuanto tardaste en darte cuenta de que estaba abierto. */
@@ -465,5 +702,97 @@ export async function revocarPermiso(permisoId: string): Promise<string | null> 
     return respuesta.mensaje;
   } catch (error) {
     return error instanceof ApiError ? error.message : null;
+  }
+}
+
+// --------------------------------------------------------------------------
+// Rehidratacion: que permisos ya estaban concedidos
+// --------------------------------------------------------------------------
+
+/** Lo que sabemos del permiso al montar una sala, sin abrir ningun dialogo. */
+export interface EstadoDePermiso {
+  /** Lo que dice el navegador ahora mismo. */
+  navegador: PermissionState | "desconocido";
+  /** Si el laboratorio ya tenia un permiso concedido de este tipo en la sesion. */
+  registradoEnBackend: boolean;
+  /** Id del permiso concedido, para poder releer la ubicacion sin volver a pedirla. */
+  permisoId: string | null;
+  /** Se puede entrar sin volver a preguntar. */
+  concedido: boolean;
+}
+
+/**
+ * Consulta el estado real de un permiso, sin abrir dialogo.
+ *
+ * Blackjack y Mesa en Vivo inicializaban su estado en `prompt` en cada montaje,
+ * asi que al refrescar o volver a la sala volvian a exigir una autorizacion que
+ * el navegador ya tenia concedida. Se preguntan las dos fuentes porque
+ * responden cosas distintas y las dos importan:
+ *
+ *   - **La Permissions API** dice si el navegador volveria a preguntar. Es lo
+ *     que decide si hay que mostrar la pantalla de bloqueo.
+ *   - **El backend** dice si esta sesion de laboratorio ya tiene el permiso
+ *     registrado, que es lo que hace falta para releer la ubicacion o
+ *     reconstruir el informe final.
+ *
+ * Ninguna de las dos sustituye a la otra: el navegador no sabe nada del estudio,
+ * y el estudio no puede ver la configuracion del navegador.
+ */
+export async function consultarEstadoDePermiso(llave: PermissionKey): Promise<EstadoDePermiso> {
+  const tipo = TIPO_EN_LA_API[llave];
+
+  const [navegador, registro] = await Promise.all([
+    estadoEnElNavegador(llave),
+    tipo === null ? Promise.resolve(null) : buscarPermisoConcedido(tipo),
+  ]);
+
+  return {
+    navegador,
+    registradoEnBackend: registro !== null,
+    permisoId: registro,
+    // Basta con que el navegador lo tenga concedido: exigir ademas el registro
+    // volveria a atar el acceso a la telemetria, que es el fallo que se corrigio.
+    concedido: navegador === "granted",
+  };
+}
+
+/** `navigator.permissions` no cubre todo ni existe en todos los navegadores. */
+async function estadoEnElNavegador(llave: PermissionKey): Promise<PermissionState | "desconocido"> {
+  if (llave === "notifications") {
+    if (typeof window === "undefined" || !("Notification" in window)) return "desconocido";
+    // `Notification.permission` es sincrono y fiable en todos los navegadores.
+    return Notification.permission === "default" ? "prompt" : Notification.permission;
+  }
+
+  const nombre: Record<string, PermissionName> = {
+    camera: "camera" as PermissionName,
+    microphone: "microphone" as PermissionName,
+    location: "geolocation" as PermissionName,
+  };
+
+  const consultable = nombre[llave];
+  if (!consultable || typeof navigator === "undefined" || !navigator.permissions) return "desconocido";
+
+  try {
+    const estado = await navigator.permissions.query({ name: consultable });
+    return estado.state;
+  } catch {
+    // Safari no soporta `camera`/`microphone` en Permissions API: se responde
+    // "desconocido" y la sala pregunta, que es el comportamiento seguro.
+    return "desconocido";
+  }
+}
+
+/** El permiso concedido de este tipo en la sesion actual, si lo hay. */
+async function buscarPermisoConcedido(tipo: TipoPermiso): Promise<string | null> {
+  const sesionId = useLabStore.getState().sesionId;
+  if (!sesionId) return null;
+
+  try {
+    const { permisos } = await api.permisos.listar(sesionId, { estado: "concedido", tipo });
+    return permisos[0]?.id ?? null;
+  } catch {
+    // Que no se pueda consultar no debe bloquear la sala.
+    return null;
   }
 }

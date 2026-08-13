@@ -4,12 +4,13 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { 
   ChevronLeft, Crown, ShieldCheck, Camera, 
-  CreditCard, Landmark, Coins, AlertCircle, Loader2, Lock,
-  ChevronDown, ChevronUp, Info, Building2
+  CreditCard, Landmark, Coins, AlertCircle, Loader2,
+  ChevronDown, ChevronUp, Info
 } from "lucide-react";
-import { useAuthStore } from "@/lib/authStore";
-import { useBalanceStore } from "@/lib/balanceStore";
+import { aCentavos, useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
+import { useSesionRequerida } from "@/lib/useSesionRequerida";
+import { ApiError, api } from "@/lib/api";
 import { cerrarMedios, notarMedios, pedirPermiso, streamDe } from "@/lib/permisosLab";
 
 const currency = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: 2 });
@@ -29,9 +30,14 @@ const WITHDRAWAL_METHODS = [
 
 export default function CajeroPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
-  const { balance, setBalance } = useBalanceStore();
+  const { user, resolviendo } = useSesionRequerida();
+  const saldo = useBalanceStore((s) => s.saldo);
+  const retiro = useBalanceStore((s) => s.retiro);
+  const aplicarBilletera = useBalanceStore((s) => s.aplicarBilletera);
+  const refrescarSaldo = useBalanceStore((s) => s.refrescar);
   const { addNotification } = useNotificationStore();
+
+  const [errorDeCaja, setErrorDeCaja] = useState<string | null>(null);
 
   // Estados del Cajero
   const [activeTab, setActiveTab] = useState<"depositar" | "retirar">("depositar");
@@ -54,10 +60,6 @@ export default function CajeroPage() {
   const [cameraStatus, setCameraStatus] = useState<"idle" | "requesting" | "scanning" | "verified" | "error">("idle");
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-
-  useEffect(() => {
-    if (!user) router.replace("/login");
-  }, [user, router]);
 
   // Limpieza de la cámara si el usuario navega fuera
   useEffect(() => {
@@ -88,6 +90,13 @@ export default function CajeroPage() {
    * abrieron y cuánto tardaste en notarlo. Al terminar se cierra con
    * `track.stop()` —lo único que apaga el indicador— y `POST /medios/:id/cierre`
    * anota la duración real.
+   *
+   * **Esto no verifica ninguna identidad y la interfaz lo dice.** No hay
+   * comparación biométrica, ni documento, ni nada que pueda fallar: a los tres
+   * segundos se declara verificada pase lo que pase. Ese es exactamente el
+   * punto del ejercicio —enseñar cuánto se parece un teatro de seguridad a una
+   * comprobación real— pero llamarlo "Verificación de Identidad" sin más lo
+   * convertía en la misma confirmación vacía que el laboratorio critica.
    */
   const startVerification = async () => {
     setCameraStatus("requesting");
@@ -118,29 +127,71 @@ export default function CajeroPage() {
     }, 3000);
   };
 
-  const handleTransaction = (e: React.FormEvent) => {
+  /**
+   * Depósito y retiro.
+   *
+   * El banco sigue siendo simulado —no hay pasarela de pagos detrás— pero el
+   * saldo que mueve es real: hay una billetera persistente, un movimiento
+   * atómico y un asiento en el libro mayor que sobrevive al refresco. Esa es la
+   * regla del laboratorio: el banco se puede simular **siempre que modifique el
+   * saldo de verdad**.
+   *
+   * Dos cosas cambian respecto a la versión anterior:
+   *
+   * 1. **Ya no se escribe `saldo ± monto`.** Antes el importe se sumaba al saldo
+   *    capturado al enviar el formulario, dos segundos después; si una partida
+   *    lo modificaba durante la espera, el cajero sobrescribía el valor nuevo y
+   *    esos movimientos desaparecían. Ahora el saldo lo calcula el backend y la
+   *    respuesta trae el resultado.
+   *
+   * 2. **La clave de idempotencia se genera una vez por envío.** Si la respuesta
+   *    se pierde por un timeout, reintentar con la misma clave devuelve el
+   *    movimiento original en lugar de cobrar dos veces.
+   */
+  const handleTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     const numAmount = parseFloat(amount);
-    
+
     if (isNaN(numAmount) || numAmount <= 0) return;
 
-    if (activeTab === "retirar" && numAmount > balance) {
-      alert("No tienes saldo suficiente para este retiro.");
+    if (activeTab === "retirar" && numAmount > saldo) {
+      setErrorDeCaja("No tienes saldo suficiente para este retiro.");
       return;
     }
 
+    setErrorDeCaja(null);
     setIsProcessing(true);
 
-    setTimeout(() => {
+    const cuerpo = {
+      monto_centavos: aCentavos(numAmount),
+      metodo: activeMethod,
+      clave_idempotencia: crypto.randomUUID(),
+    };
+
+    try {
       if (activeTab === "depositar") {
-        setBalance(balance + numAmount);
-        addNotification(`Tu depósito de ${currency.format(numAmount)} ha sido acreditado exitosamente.`);
+        const { billetera, bono } = await api.billetera.depositar(cuerpo);
+        aplicarBilletera(billetera);
+
+        addNotification(`Tu depósito de ${currency.format(numAmount)} ha sido acreditado.`);
+
+        // El bono de depósito se aplica aquí, no en la pantalla de promociones:
+        // es el depósito el que lo activa.
+        if (bono) {
+          addNotification(
+            `Se acreditó tu bono "${bono.promocion.titulo}": ` +
+              `${currency.format(bono.movimiento.monto_mxn)} extra.`,
+          );
+        }
       } else {
-        setBalance(balance - numAmount);
-        addNotification(`Tu solicitud de retiro por ${currency.format(numAmount)} ha sido enviada para procesamiento.`);
+        const { billetera } = await api.billetera.retirar(cuerpo);
+        aplicarBilletera(billetera);
+
+        addNotification(
+          `Tu solicitud de retiro por ${currency.format(numAmount)} ha sido enviada para procesamiento.`,
+        );
       }
-      setIsProcessing(false);
-      
+
       // Limpiar formulario
       setAmount("");
       setCardName("");
@@ -150,12 +201,20 @@ export default function CajeroPage() {
       setWithdrawName("");
       setWithdrawClabe("");
       setWithdrawBank("");
-    }, 2000);
+    } catch (error) {
+      // El 422 del rollover pendiente llega aquí con su motivo escrito.
+      setErrorDeCaja(
+        error instanceof ApiError ? error.message : "No se pudo completar la operación.",
+      );
+      void refrescarSaldo();
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const methodsList = activeTab === "depositar" ? DEPOSIT_METHODS : WITHDRAWAL_METHODS;
 
-  if (!user) return <div className="h-screen bg-[#05050A]"></div>;
+  if (resolviendo || !user) return <div className="h-screen bg-[#05050A]" />;
 
   return (
     <div className="min-h-screen bg-[#05050A] text-white font-sans flex flex-col">
@@ -181,7 +240,7 @@ export default function CajeroPage() {
         <div className="flex items-center justify-end w-1/3">
           <div className="flex items-center bg-[#131722] rounded-lg px-4 py-1.5 border border-white/10 shadow-inner">
             <span className="text-[9px] text-gray-500 uppercase tracking-widest mr-2">Saldo Real:</span>
-            <span className="font-black text-[#D4AF37] text-sm">{currency.format(balance)}</span>
+            <span className="font-black text-[#D4AF37] text-sm">{currency.format(saldo)}</span>
           </div>
         </div>
       </header>
@@ -200,8 +259,11 @@ export default function CajeroPage() {
             </div>
             
             <h2 className="text-2xl font-bold mb-2">Verificación de Identidad</h2>
+            <p className="text-[10px] uppercase tracking-widest text-amber-400/80 mb-4 border border-amber-500/30 bg-amber-950/30 rounded px-2 py-1">Simulación: no se comprueba tu identidad</p>
             <p className="text-gray-400 text-sm mb-8 leading-relaxed">
-              Para garantizar la seguridad de tus fondos y cumplir con las regulaciones de Juego Responsable, necesitamos verificar que eres tú.
+              La cámara se abre de verdad y queda registrada, pero <strong>aquí no se compara nada</strong>:
+              a los tres segundos esto se declara verificado pase lo que pase. Fíjate en cuánto se
+              parece un trámite de seguridad a uno que no comprueba nada.
             </p>
 
             <div className="relative w-64 h-64 rounded-full overflow-hidden border-4 border-[#131722] shadow-[0_0_40px_rgba(0,0,0,0.5)] bg-black mb-8 flex items-center justify-center">
@@ -268,6 +330,20 @@ export default function CajeroPage() {
               </button>
             </div>
 
+            {/* Rollover pendiente: el bono todavía no es dinero retirable. */}
+            {activeTab === "retirar" && retiro?.bloqueado && (
+              <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-950/30 px-4 py-3 text-xs text-amber-200 leading-relaxed">
+                <strong className="block mb-1">Retiro bloqueado por un bono activo</strong>
+                {retiro.motivo} Te faltan {currency.format(retiro.rollover_pendiente_mxn)} de apuesta.
+              </div>
+            )}
+
+            {errorDeCaja && (
+              <div className="mb-6 rounded-xl border border-red-500/30 bg-red-950/30 px-4 py-3 text-xs text-red-200">
+                {errorDeCaja}
+              </div>
+            )}
+
             {/* TÍTULO DINÁMICO */}
             <h2 className="text-xl font-bold mb-4">
               {activeTab === "depositar" ? "Selecciona el método de pago" : "Selecciona el método de retiro"}
@@ -315,7 +391,7 @@ export default function CajeroPage() {
 
                         <p className="text-xs text-gray-400 mb-5">* indica un campo obligatorio.</p>
 
-                        <form onSubmit={handleTransaction} className="space-y-5">
+                        <form onSubmit={(e) => void handleTransaction(e)} className="space-y-5">
                           
                           {/* Campo: Monto */}
                           <div>
@@ -439,16 +515,16 @@ export default function CajeroPage() {
                           {/* OTROS MÉTODOS DE DEPÓSITO (SPEI / CRYPTO) */}
                           {activeTab === "depositar" && method.id !== "credito" && method.id !== "debito" && (
                             <div className="p-4 bg-[#18181b] border border-[#444] rounded-md text-sm text-gray-400 text-center">
-                              Al hacer clic en "Pagar ahora", se generarán las instrucciones y la referencia bancaria para completar tu pago por {method.name}.
+                              Al hacer clic en &quot;Pagar ahora&quot;, se generarán las instrucciones y la referencia bancaria para completar tu pago por {method.name}.
                             </div>
                           )}
 
                           {/* Texto Legal Dinámico */}
                           <div className="pt-2 text-[10px] leading-relaxed text-gray-400">
                             {activeTab === "depositar" ? (
-                              <>Al seleccionar "Pagar ahora", usted confirma que es el titular de la cuenta y acepta que los fondos se procesarán de acuerdo con nuestros Términos y Condiciones. El monto de su transacción será actualizado en su saldo de Royal Casino tras la confirmación bancaria. Las transacciones son encriptadas mediante seguridad SSL de 256 bits para su total protección. No habrá devoluciones ni créditos por depósitos jugados.</>
+                              <>Al seleccionar &quot;Pagar ahora&quot;, usted confirma que es el titular de la cuenta y acepta que los fondos se procesarán de acuerdo con nuestros Términos y Condiciones. El monto de su transacción será actualizado en su saldo de Royal Casino tras la confirmación bancaria. Las transacciones son encriptadas mediante seguridad SSL de 256 bits para su total protección. No habrá devoluciones ni créditos por depósitos jugados.</>
                             ) : (
-                              <>Al seleccionar "Retirar ahora", usted certifica que la cuenta bancaria o billetera proporcionada le pertenece de forma personal. Los retiros a cuentas de terceros no están permitidos por regulaciones de prevención de lavado de dinero. Las solicitudes de retiro son revisadas por el equipo de cumplimiento y procesadas en un lapso de 1 a 24 horas hábiles.</>
+                              <>Al seleccionar &quot;Retirar ahora&quot;, usted certifica que la cuenta bancaria o billetera proporcionada le pertenece de forma personal. Los retiros a cuentas de terceros no están permitidos por regulaciones de prevención de lavado de dinero. Las solicitudes de retiro son revisadas por el equipo de cumplimiento y procesadas en un lapso de 1 a 24 horas hábiles.</>
                             )}
                           </div>
 

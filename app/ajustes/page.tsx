@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { 
   Settings, Bell, ShieldAlert, Sliders, 
@@ -9,7 +9,7 @@ import {
   AlertTriangle, CheckCircle, EyeOff, Sparkles,
   X, Download, Cookie, Loader2
 } from "lucide-react";
-import { useAuthStore } from "@/lib/authStore";
+import { useSesionRequerida } from "@/lib/useSesionRequerida";
 import { useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
 
@@ -17,8 +17,8 @@ const currency = new Intl.NumberFormat("es-MX", { style: "currency", currency: "
 
 export default function AjustesPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
-  const { balance } = useBalanceStore();
+  const { user, resolviendo } = useSesionRequerida();
+  const saldo = useBalanceStore((s) => s.saldo);
   const { addNotification } = useNotificationStore();
 
   const [activeTab, setActiveTab] = useState<"general" | "notificaciones" | "responsable" | "privacidad">("general");
@@ -46,10 +46,6 @@ export default function AjustesPage() {
   const [isRequestingData, setIsRequestingData] = useState(false);
   const [dataRequested, setDataRequested] = useState(false);
 
-  useEffect(() => {
-    if (!user) router.replace("/login");
-  }, [user, router]);
-
   const handleSaveSettings = () => {
     setIsSaving(true);
     setTimeout(() => {
@@ -72,7 +68,7 @@ export default function AjustesPage() {
     }, 2500);
   };
 
-  if (!user) return <div className="min-h-screen bg-[#05050A]"></div>;
+  if (resolviendo || !user) return <div className="min-h-screen bg-[#05050A]" />;
 
   // Componente interno para Toggle Switches
   const ToggleSwitch = ({ checked, onChange, disabled = false }: { checked: boolean, onChange: () => void, disabled?: boolean }) => (
@@ -106,7 +102,7 @@ export default function AjustesPage() {
         <div className="flex items-center justify-end w-1/3">
           <div className="flex items-center bg-[#131722] rounded-lg px-4 py-1.5 border border-white/10 shadow-inner">
             <span className="text-[9px] text-gray-500 uppercase tracking-widest mr-2">Saldo Real:</span>
-            <span className="font-black text-[#D4AF37] text-sm">{currency.format(balance)}</span>
+            <span className="font-black text-[#D4AF37] text-sm">{currency.format(saldo)}</span>
           </div>
         </div>
       </header>

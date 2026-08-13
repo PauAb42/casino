@@ -1,13 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { 
   HeadphonesIcon, MessageSquare, Mail, Phone, 
-  ChevronDown, ChevronUp, FileText, CheckCircle, 
-  Loader2, Crown, Sparkles, Send
+  ChevronDown, FileText, CheckCircle, 
+  Loader2, Send
 } from "lucide-react";
-import { useAuthStore } from "@/lib/authStore";
+import { useSesionRequerida } from "@/lib/useSesionRequerida";
 import { useNotificationStore } from "@/lib/notificationStore";
 
 const FAQS = [
@@ -39,8 +38,7 @@ const FAQS = [
 ];
 
 export default function SoportePage() {
-  const router = useRouter();
-  const { user } = useAuthStore();
+  const { user, resolviendo } = useSesionRequerida();
   const { addNotification } = useNotificationStore();
 
   const [activeFAQ, setActiveFAQ] = useState<string | null>("faq-1");
@@ -51,10 +49,6 @@ export default function SoportePage() {
     asunto: "",
     mensaje: ""
   });
-
-  useEffect(() => {
-    if (!user) router.replace("/login");
-  }, [user, router]);
 
   const toggleFAQ = (id: string) => {
     setActiveFAQ(activeFAQ === id ? null : id);
@@ -82,7 +76,7 @@ export default function SoportePage() {
     }, 2000);
   };
 
-  if (!user) return <div className="min-h-screen bg-[#05050A]"></div>;
+  if (resolviendo || !user) return <div className="min-h-screen bg-[#05050A]" />;
 
   return (
     <div className="min-h-screen bg-[#05050A] text-white font-sans pb-20">

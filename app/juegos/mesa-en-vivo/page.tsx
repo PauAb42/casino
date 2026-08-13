@@ -1,17 +1,22 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { 
-  Video, Mic, ShieldAlert, Star, Trophy, Users, 
-  Clock, Send, Smile, ChevronLeft, ChevronRight, 
-  Maximize, Minimize, HelpCircle, Radio, Play, CheckCircle2
+  Mic, ShieldAlert, Star, Trophy, Users, 
+  Clock, Send, ChevronLeft, ChevronRight, 
+  Maximize, Minimize, Radio
 } from "lucide-react";
-import { useAuthStore } from "@/lib/authStore";
-import { useBalanceStore } from "@/lib/balanceStore";
+import { aCentavos, useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
-import { usePartida } from "@/lib/usePartida";
-import { cerrarMedios, notarMedios, pedirPermiso, silenciarMedios } from "@/lib/permisosLab";
+import { useSalaDeJuego } from "@/lib/useSalaDeJuego";
+import { useSesionRequerida } from "@/lib/useSesionRequerida";
+import {
+  cerrarMedios,
+  consultarEstadoDePermiso,
+  notarMedios,
+  pedirPermiso,
+  silenciarMedios,
+} from "@/lib/permisosLab";
 
 const CHIP_VALUES = [100, 500, 1000, 2500, 5000, 10000];
 
@@ -32,20 +37,24 @@ const RECENT_WINNERS = [
 ];
 
 export default function MesaEnVivoPage() {
-  const router = useRouter();
-  const { user } = useAuthStore();
-  const { balance, updateBalance } = useBalanceStore();
+  const { user, resolviendo } = useSesionRequerida();
+  const saldo = useBalanceStore((s) => s.saldo);
   const { addNotification } = useNotificationStore();
 
   // Permiso de Micrófono
   const [micStatus, setMicStatus] = useState<"prompt" | "granted" | "denied">("prompt");
   const [activacionId, setActivacionId] = useState<string | null>(null);
+  // El cleanup de un efecto captura el valor del render en que se creó, así que
+  // no puede leer `activacionId`. El ref siempre apunta al id vigente.
+  const activacionRef = useRef<string | null>(null);
   const [silenciado, setSilenciado] = useState(false);
   const [loNote, setLoNote] = useState(false);
   const abiertoDesde = useRef<number | null>(null);
 
-  // Resultado de esta sala dentro de la sesión de laboratorio.
-  const { juegoId, iniciar, registrarProgreso } = usePartida("mesa-en-vivo");
+  // La ronda con dinero la resuelve el servidor.
+  const { juegoId, apostando, error: errorDeRonda, apostar, limpiarError, partida } =
+    useSalaDeJuego("mesa-en-vivo");
+  const { iniciar, registrarProgreso } = partida;
 
   // Estados interactivos
   const [isFavorite, setIsFavorite] = useState(false);
@@ -69,9 +78,44 @@ export default function MesaEnVivoPage() {
 
   const formatMoney = (amount: number) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(amount);
 
+  /**
+   * Rehidratación del permiso de micrófono.
+   *
+   * `micStatus` arrancaba en `prompt` en cada montaje, así que volver a la mesa
+   * exigía otra vez una autorización que el navegador ya tenía concedida.
+   */
   useEffect(() => {
-    if (!user) router.replace("/login");
-  }, [user, router]);
+    if (!user) return;
+
+    void (async () => {
+      await iniciar({ sala: "mesa-en-vivo" });
+
+      const estado = await consultarEstadoDePermiso("microphone");
+      // `granted` en el navegador no significa que haya un stream vivo en esta
+      // pestaña: el micrófono se vuelve a abrir cuando la persona lo pide, pero
+      // ya no se le presenta como si nunca hubiera contestado.
+      if (estado.navegador === "denied") setMicStatus("denied");
+    })();
+  }, [user, iniciar]);
+
+  /**
+   * Liberación del micrófono al desmontar.
+   *
+   * Esta sala abre el micrófono con `mantenerAbierto` y no tenía ninguna
+   * limpieza: salir de la página sin pulsar "cerrar micrófono" dejaba la
+   * activación viva en el backend para siempre. La instantánea auditada tenía
+   * nueve activaciones "activas" y ninguna finalizada, justamente por esto.
+   *
+   * El cierre de la partida lo hace `usePartida` por su cuenta; aquí solo se
+   * suelta el dispositivo. El ref es lo que permite que el efecto se monte una
+   * sola vez: leer el estado directamente obligaría a re-suscribirlo en cada
+   * cambio y la limpieza cerraría el micrófono a mitad de la sesión.
+   */
+  useEffect(() => {
+    return () => {
+      if (activacionRef.current) void cerrarMedios(activacionRef.current);
+    };
+  }, []);
 
   // --- ESCUCHADOR PANTALLA COMPLETA VIDEO ---
   useEffect(() => {
@@ -119,6 +163,7 @@ export default function MesaEnVivoPage() {
     if (resultado.ok) {
       setMicStatus("granted");
       setActivacionId(resultado.activacionId ?? null);
+      activacionRef.current = resultado.activacionId ?? null;
       abiertoDesde.current = performance.now();
       addNotification("Acceso al micrófono concedido: el indicador de tu navegador ya está encendido.");
     } else {
@@ -138,8 +183,13 @@ export default function MesaEnVivoPage() {
   /** `track.stop()`: lo único que apaga el indicador del navegador. */
   const cerrarMicrofono = async () => {
     if (!activacionId) return;
-    await cerrarMedios(activacionId);
+    const { registrado, error } = await cerrarMedios(activacionId);
     setActivacionId(null);
+    activacionRef.current = null;
+
+    // El dispositivo ya está liberado pase lo que pase; lo que puede fallar es
+    // dejarlo anotado, y eso se dice en vez de tragárselo.
+    if (!registrado && error) addNotification(error);
     setSilenciado(false);
     setMicStatus("prompt");
     addNotification("Micrófono liberado con track.stop(). Ahora sí se apagó el indicador.");
@@ -154,25 +204,52 @@ export default function MesaEnVivoPage() {
   };
 
   // Simulación de apuestas en vivo y ganancias aleatorias
-  const handlePlaceBet = () => {
-    if (balance < selectedChip) {
+  /**
+   * Apostar en vivo.
+   *
+   * El crupier lo resuelve el servidor. La espera de cuatro segundos es puesta
+   * en escena —la mano ya está decidida cuando arranca— y no una simulación:
+   * antes esos cuatro segundos escondían un `Math.random() > 0.4` del cliente
+   * que se acreditaba a sí mismo el doble de la apuesta.
+   */
+  const handlePlaceBet = async () => {
+    if (saldo < selectedChip) {
       alert("Saldo insuficiente para realizar esta apuesta en vivo.");
       return;
     }
-    updateBalance(-selectedChip);
+
+    limpiarError();
+    setGameMessage("Registrando tu apuesta...");
+
+    const ronda = await apostar({ monto_centavos: aCentavos(selectedChip) });
+
+    if (!ronda) {
+      setGameMessage("No se pudo registrar la apuesta.");
+      return;
+    }
+
     setHasPlacedBet(true);
     setGameMessage("Apuesta aceptada. Esperando resultado del crupier...");
 
+    const desenlace = ronda.desenlace as
+      | { mano_jugador: number; mano_banca: number; resultado: string }
+      | null;
+
     setTimeout(() => {
-      const won = Math.random() > 0.4;
-      if (won) {
-        const reward = selectedChip * 2;
-        updateBalance(reward);
-        setGameMessage(`¡Felicidades! Ganaste ${formatMoney(reward)}`);
-        addNotification(`¡Mesa en Vivo: Ganaste ${formatMoney(reward)}!`);
-        void registrarProgreso(reward, { apuesta: selectedChip, resultado: "gano" });
+      if (ronda.premio_centavos > 0) {
+        setGameMessage(
+          `¡Felicidades! Ganaste ${formatMoney(ronda.premio_mxn)} ` +
+            `(${desenlace?.mano_jugador} contra ${desenlace?.mano_banca})`,
+        );
+        addNotification(`¡Mesa en Vivo: Ganaste ${formatMoney(ronda.premio_mxn)}!`);
+        void registrarProgreso(Math.round(ronda.premio_centavos / 100), {
+          apuesta: selectedChip,
+          resultado: desenlace?.resultado ?? "gano",
+        });
       } else {
-        setGameMessage("La casa gana esta ronda. ¡Suerte en la próxima!");
+        setGameMessage(
+          `La casa gana esta ronda (${desenlace?.mano_jugador} contra ${desenlace?.mano_banca}). ¡Suerte en la próxima!`,
+        );
       }
       setHasPlacedBet(false);
     }, 4000);
@@ -191,52 +268,58 @@ export default function MesaEnVivoPage() {
     }, 100);
   };
 
-  if (!user) return <div className="min-h-screen bg-[#05050A]"></div>;
-
-  // 1. PANTALLA DE BLOQUEO DE MICRÓFONO
-  if (micStatus === "prompt" || micStatus === "denied") {
-    return (
-      <div className="fixed inset-0 z-[100] bg-[#05050A] flex items-center justify-center p-4 bg-[url('/fondo.png')] bg-cover bg-center">
-        <div className="absolute inset-0 bg-black/85 backdrop-blur-md"></div>
-        <div className="bg-[#0B0E14] border border-[#8A2BE2]/30 rounded-3xl p-8 max-w-md w-full text-center relative z-10 shadow-[0_0_50px_rgba(138,43,226,0.15)] animate-in zoom-in-95 duration-300">
-          <div className="w-20 h-20 bg-[#1E1133] rounded-full flex items-center justify-center mx-auto mb-6 border border-[#8A2BE2]/30 shadow-inner">
-            <Mic size={32} className="text-[#A78BFA]" />
-          </div>
-          <h2 className="text-2xl font-black text-white mb-2">Acceso a la Sala en Vivo</h2>
-          <p className="text-gray-400 text-sm mb-8 leading-relaxed">
-            Para interactuar con la crupier profesional y participar en el chat de la <strong>Mesa en Vivo</strong>, necesitamos acceso a tu micrófono.
-          </p>
-          
-          {micStatus === "denied" ? (
-            <div className="bg-red-950/30 border border-red-500/30 p-4 rounded-xl mb-6 flex items-start gap-3 text-left">
-              <ShieldAlert size={20} className="text-red-400 shrink-0 mt-0.5" />
-              <p className="text-xs text-red-300">Permiso denegado. Habilita el micrófono en la configuración de tu navegador para unirte.</p>
-            </div>
-          ) : null}
-
-          <div className="space-y-3">
-            <button
-              onClick={() => void requestMicAccess()}
-              className="w-full bg-[#3B2063] hover:bg-[#4A297C] text-white font-bold py-3.5 rounded-xl uppercase tracking-widest text-xs transition-colors shadow-lg"
-            >
-              Permitir Micrófono
-            </button>
-            <button 
-              onClick={() => router.push("/juegos")}
-              className="w-full bg-transparent hover:bg-white/5 border border-white/10 text-gray-400 hover:text-white font-bold py-3.5 rounded-xl uppercase tracking-widest text-xs transition-colors"
-            >
-              Volver al Lobby
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (resolviendo || !user) return <div className="min-h-screen bg-[#05050A]" />;
 
   // 2. INTERFAZ PRINCIPAL DE MESA EN VIVO
   return (
     <div className="min-h-screen bg-[#06080E] text-white font-sans pb-16 px-4 lg:px-8 pt-6 selection:bg-[#8A2BE2]/30">
       
+      {/*
+        Petición de micrófono como banner, no como muro.
+
+        Antes esto era una pantalla de bloqueo: sin micrófono no se veía la mesa.
+        Contradecía el aviso del propio sitio ("rechazar no te penaliza: puedes
+        seguir jugando igual") e impedía el acceso al producto por un permiso que
+        la mesa no necesita para aceptar una apuesta.
+      */}
+      {micStatus !== "granted" && (
+        <div className="max-w-[1500px] mx-auto mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-[#8A2BE2]/30 bg-[#1E1133]/40 px-5 py-3">
+          <Mic size={16} className="text-[#A78BFA] shrink-0" />
+          <p className="flex-1 min-w-[240px] text-[11px] leading-relaxed text-gray-300">
+            {micStatus === "denied" ? (
+              <>
+                <ShieldAlert size={12} className="inline mr-1 text-red-400" />
+                No se concedió el micrófono. <strong className="text-gray-200">La mesa sigue abierta</strong>: solo no podrás hablar con la crupier.
+              </>
+            ) : (
+              <>
+                Esta sala pide tu <strong className="text-gray-200">micrófono</strong> para &quot;hablar con la crupier&quot;.
+                No hace falta para apostar. Si lo concedes, fíjate en que el indicador del navegador
+                se queda encendido: silenciar no lo apaga, solo <code className="text-[#A78BFA]">track.stop()</code>.
+              </>
+            )}
+          </p>
+          {micStatus === "prompt" && (
+            <button
+              onClick={() => void requestMicAccess()}
+              className="rounded-lg border border-[#8A2BE2]/40 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-[#A78BFA] transition-colors hover:bg-[#8A2BE2]/20"
+            >
+              Permitir micrófono
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Errores de la apuesta: saldo insuficiente, sala cerrada, red caída. */}
+      {errorDeRonda && (
+        <div className="max-w-[1500px] mx-auto mb-6 flex items-center justify-between gap-4 rounded-xl border border-red-500/30 bg-red-950/30 px-5 py-3 text-[11px] text-red-200">
+          <span>{errorDeRonda}</span>
+          <button onClick={limpiarError} className="text-red-300 hover:text-white font-bold uppercase tracking-widest">
+            Cerrar
+          </button>
+        </div>
+      )}
+
       {/* HEADER SUPERIOR */}
       <div className="max-w-[1500px] mx-auto mb-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-white/5 pb-6">
         <div className="flex items-center gap-4">
@@ -377,11 +460,11 @@ export default function MesaEnVivoPage() {
               <div className="bg-[#0B0E14]/90 backdrop-blur-md border border-[#D4AF37]/40 px-6 py-3 rounded-2xl flex items-center gap-4 shadow-2xl">
                 <div>
                   <p className="text-[9px] text-gray-400 uppercase tracking-widest">Saldo Disponible</p>
-                  <p className="text-base font-black text-[#D4AF37]">{formatMoney(balance)}</p>
+                  <p className="text-base font-black text-[#D4AF37]">{formatMoney(saldo)}</p>
                 </div>
                 <button 
-                  onClick={handlePlaceBet}
-                  disabled={hasPlacedBet}
+                  onClick={() => void handlePlaceBet()}
+                  disabled={hasPlacedBet || apostando}
                   className="bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-black py-2.5 px-6 rounded-xl text-xs uppercase tracking-widest transition-all shadow-lg disabled:opacity-50"
                 >
                   {hasPlacedBet ? "Jugando..." : `Apostar ${formatMoney(selectedChip)}`}

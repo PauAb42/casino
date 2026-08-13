@@ -3,8 +3,10 @@
 import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { useAuthStore } from "@/lib/authStore";
+import { useBalanceStore } from "@/lib/balanceStore";
 import { useLabStore } from "@/lib/labStore";
 import { registrarEvento, vaciarEventos } from "@/lib/eventos";
+import { cerrarTodosLosMedios } from "@/lib/permisosLab";
 
 /**
  * Arranque del recorrido.
@@ -51,10 +53,25 @@ export default function SessionBootstrap() {
     registrarEvento("navegacion", { ruta });
   }, [ruta, sesionId]);
 
-  // 5. Al cerrar la pestana se vacia la cola: los eventos pendientes se perderian.
+  // 5. El saldo, en cuanto hay identidad. Se pide una sola vez aqui y despues lo
+  //    mantiene al dia cada respuesta de apuesta, deposito o retiro: pedirlo en
+  //    cada componente que lo muestra multiplicaria las peticiones sin motivo.
+  useEffect(() => {
+    if (estado !== "autenticado") return;
+    void useBalanceStore.getState().refrescar();
+  }, [estado]);
+
+  // 6. Al cerrar la pestana se vacia la cola de eventos y se sueltan los medios
+  //    que siguieran abiertos.
+  //
+  //    Lo segundo importa mas de lo que parece: sin esto, salir de la pagina con
+  //    el microfono abierto dejaba la activacion viva en el backend para
+  //    siempre. El informe de privacidad decia "9 activas, ninguna finalizada"
+  //    mientras el dispositivo llevaba rato liberado por el propio navegador.
   useEffect(() => {
     const alSalir = () => {
       void vaciarEventos();
+      void cerrarTodosLosMedios();
     };
     window.addEventListener("pagehide", alSalir);
     return () => window.removeEventListener("pagehide", alSalir);

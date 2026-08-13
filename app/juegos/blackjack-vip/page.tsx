@@ -1,17 +1,17 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { 
   ArrowLeft, Star, Maximize, Minimize, HelpCircle, 
-  Plus, X, Copy, Layers, RotateCcw, Edit2, 
+  Plus, X, Layers, Edit2, 
   ChevronLeft, ChevronRight, MapPin, ShieldAlert
 } from "lucide-react";
-import { useAuthStore } from "@/lib/authStore";
-import { useBalanceStore } from "@/lib/balanceStore";
+import { aCentavos, useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
-import { usePartida } from "@/lib/usePartida";
-import { pedirPermiso, registrarLecturaDeUbicacion } from "@/lib/permisosLab";
+import { useSalaDeJuego } from "@/lib/useSalaDeJuego";
+import { useSesionRequerida } from "@/lib/useSesionRequerida";
+import { consultarEstadoDePermiso, pedirPermiso, registrarLecturaDeUbicacion } from "@/lib/permisosLab";
 
 // --- TIPOS Y LÓGICA DEL BARAJA ---
 type Suit = "♠" | "♥" | "♦" | "♣";
@@ -26,24 +26,42 @@ interface Card {
 
 const CHIP_VALUES = [100, 500, 1000, 2500, 5000, 10000];
 
-const createDeck = (): Card[] => {
-  const suits: Suit[] = ["♠", "♥", "♦", "♣"];
-  const ranks: { rank: Rank; value: number }[] = [
-    { rank: "2", value: 2 }, { rank: "3", value: 3 }, { rank: "4", value: 4 },
-    { rank: "5", value: 5 }, { rank: "6", value: 6 }, { rank: "7", value: 7 },
-    { rank: "8", value: 8 }, { rank: "9", value: 9 }, { rank: "10", value: 10 },
-    { rank: "J", value: 10 }, { rank: "Q", value: 10 }, { rank: "K", value: 10 },
-    { rank: "A", value: 11 },
-  ];
-  let deck: Card[] = [];
-  for (let i = 0; i < 4; i++) { // 4 barajas para más realismo
-    suits.forEach(suit => {
-      ranks.forEach(r => deck.push({ suit, rank: r.rank, value: r.value }));
-    });
-  }
-  return deck.sort(() => Math.random() - 0.5); // Shuffle
+/**
+ * El palo que manda el servidor -> el simbolo que dibuja esta pantalla.
+ *
+ * La baraja, el reparto y el turno del crupier viven ahora en el motor del
+ * backend. Que el cliente barajara sus propias cartas y simulara al crupier era
+ * el agujero de esta sala: se podia repartir una mano ganadora o un crupier que
+ * se pasara siempre, y no quedaba constancia de nada.
+ */
+const PALOS: Record<string, Suit> = {
+  picas: "♠",
+  corazones: "♥",
+  diamantes: "♦",
+  treboles: "♣",
 };
 
+interface CartaDelServidor {
+  palo: string;
+  rango: string;
+  valor: number;
+}
+
+/** Convierte una carta de la API a la forma que ya sabia pintar la mesa. */
+const aCartaVisible = (carta: CartaDelServidor): Card => ({
+  suit: PALOS[carta.palo] ?? "♠",
+  rank: carta.rango as Rank,
+  value: carta.valor,
+});
+
+/**
+ * Puntaje de una mano visible.
+ *
+ * Se conserva en el cliente **solo para pintar el marcador**: el puntaje que
+ * decide quien gana lo calcula el servidor y llega en el desenlace. Tener las
+ * dos versiones no es duplicar la regla, es que una es informativa y la otra
+ * autoritativa.
+ */
 const calculateScore = (hand: Card[]): number => {
   let score = 0;
   let aces = 0;
@@ -62,22 +80,31 @@ const calculateScore = (hand: Card[]): number => {
 
 export default function BlackjackVIP() {
   const router = useRouter();
-  const { user } = useAuthStore();
-  const { balance, updateBalance } = useBalanceStore();
+  const { user, resolviendo } = useSesionRequerida();
+  const saldo = useBalanceStore((s) => s.saldo);
   const { addNotification } = useNotificationStore();
 
-  // Estados de Permisos y Pantalla
+  /**
+   * La ubicación **no** bloquea la mesa.
+   *
+   * El aviso del sitio promete que rechazar no penaliza y que se puede seguir
+   * jugando; esta sala hacía lo contrario y exigía geolocalización para repartir
+   * una sola carta. Se sigue pidiendo —y el ejercicio de "una concesión, muchas
+   * lecturas" sigue intacto— pero como banner, no como muro.
+   */
   const [locationStatus, setLocationStatus] = useState<"prompt" | "granted" | "denied">("prompt");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [permisoUbicacionId, setPermisoUbicacionId] = useState<string | null>(null);
   const [lecturaDeUbicacion, setLecturaDeUbicacion] = useState<string | null>(null);
+  const [avisoDePermiso, setAvisoDePermiso] = useState<string | null>(null);
 
-  // Resultado de esta sala dentro de la sesión de laboratorio.
-  const { juegoId, iniciar, registrarProgreso } = usePartida("blackjack-vip");
+  // La mano la reparte y resuelve el servidor.
+  const { juegoId, apostando, error: errorDeRonda, apostar, accionar, limpiarError, partida } =
+    useSalaDeJuego("blackjack-vip");
+  const { iniciar, registrarProgreso } = partida;
 
   // Estados del Juego
   const [gameState, setGameState] = useState<"betting" | "playing" | "dealerTurn" | "gameOver">("betting");
-  const [deck, setDeck] = useState<Card[]>([]);
   const [playerHand, setPlayerHand] = useState<Card[]>([]);
   const [dealerHand, setDealerHand] = useState<Card[]>([]);
   const [currentBet, setCurrentBet] = useState(500);
@@ -92,19 +119,37 @@ export default function BlackjackVIP() {
   // El backend nunca guarda las coordenadas exactas: solo una celda de ~1.1 km
   // y el HMAC de la posición.
   const requestLocation = async () => {
-    await iniciar({ sala: "blackjack-vip" });
     const resultado = await pedirPermiso("location", { juegoId });
 
-    if (resultado.ok) {
-      setLocationStatus("granted");
-      setDeck(createDeck());
-      setLecturaDeUbicacion(resultado.detalle);
-      if (resultado.permiso) setPermisoUbicacionId(resultado.permiso.id);
-    } else {
-      setLocationStatus("denied");
-      setLecturaDeUbicacion(resultado.detalle);
-    }
+    setLocationStatus(resultado.ok ? "granted" : "denied");
+    setLecturaDeUbicacion(resultado.detalle);
+    // El fallo de telemetría se informa aparte y no cuenta como denegación.
+    setAvisoDePermiso(resultado.errorDeRegistro ?? null);
+
+    if (resultado.permiso) setPermisoUbicacionId(resultado.permiso.id);
   };
+
+  /**
+   * Rehidratación: si el permiso ya estaba concedido, no se vuelve a pedir.
+   *
+   * Antes `locationStatus` arrancaba en `prompt` en cada montaje, así que
+   * refrescar la página o volver a la sala exigía otra vez una autorización que
+   * el navegador ya tenía dada.
+   */
+  useEffect(() => {
+    if (!user) return;
+
+    void (async () => {
+      await iniciar({ sala: "blackjack-vip" });
+
+      const estado = await consultarEstadoDePermiso("location");
+      if (estado.navegador === "granted") {
+        setLocationStatus("granted");
+        setPermisoUbicacionId(estado.permisoId);
+        setLecturaDeUbicacion("La mesa ya tenía tu ubicación concedida de antes.");
+      }
+    })();
+  }, [user, iniciar]);
 
   /**
    * La demostración del ejercicio: una concesión, muchas lecturas.
@@ -146,108 +191,105 @@ export default function BlackjackVIP() {
     }
   };
 
-  useEffect(() => {
-    if (!user) router.replace("/login");
-  }, [user, router]);
-
   // --- 2. LÓGICA DEL JUEGO ---
-  const dealCards = () => {
-    if (balance < currentBet) {
+  //
+  // Ninguna de estas funciones reparte una carta ni decide un ganador: piden un
+  // paso al servidor y pintan lo que responde. `aplicarPaso` es el único sitio
+  // donde el estado visible de la mesa se sincroniza con la ronda.
+
+  /**
+   * Vuelca una ronda del servidor sobre el estado de la mesa.
+   *
+   * Mientras la mano sigue abierta el backend **no manda** la segunda carta del
+   * crupier, así que aquí se dibuja un reverso de relleno. Antes esa carta
+   * viajaba al cliente y solo se "ocultaba" en la interfaz, que es enseñarla a
+   * quien abra la pestaña de red.
+   */
+  const aplicarPaso = (nueva: NonNullable<Awaited<ReturnType<typeof apostar>>>) => {
+    const desenlace = nueva.desenlace as {
+      mano_jugador: CartaDelServidor[];
+      mano_crupier: CartaDelServidor[];
+      puntaje_jugador: number;
+      puntaje_crupier?: number;
+      resultado?: string;
+      motivo?: string;
+      apuesta_centavos: number;
+    } | null;
+
+    if (!desenlace) return;
+
+    const manoJugador = desenlace.mano_jugador.map(aCartaVisible);
+    const manoCrupier = desenlace.mano_crupier.map(aCartaVisible);
+
+    setPlayerHand(manoJugador);
+    setCurrentBet(Math.round(desenlace.apuesta_centavos / 100));
+
+    if (nueva.estado === "abierta") {
+      // Reverso de relleno: la carta real todavía no ha salido del servidor.
+      setDealerHand([...manoCrupier, { suit: "♠", rank: "2", value: 0, isHidden: true }]);
+      setGameState("playing");
+      setMessage("");
+      return;
+    }
+
+    setDealerHand(manoCrupier);
+    setGameState("gameOver");
+
+    void registrarProgreso(desenlace.puntaje_jugador, {
+      motivo: desenlace.motivo ?? desenlace.resultado ?? "resuelta",
+      puntaje_crupier: desenlace.puntaje_crupier ?? 0,
+    });
+
+    const premio = nueva.premio_mxn;
+
+    switch (desenlace.resultado) {
+      case "blackjack":
+        setMessage("¡BLACKJACK!");
+        addNotification(`¡Ganaste ${formatMoney(nueva.neto_mxn)} en Blackjack VIP!`);
+        break;
+      case "jugador":
+        setMessage("¡Ganaste!");
+        addNotification(`¡Ganaste ${formatMoney(nueva.neto_mxn)} en Blackjack VIP!`);
+        break;
+      case "empate":
+        setMessage("Empate.");
+        break;
+      default:
+        setMessage(desenlace.motivo === "pasado" ? "¡Te pasaste! Pierdes." : "El Crupier Gana.");
+    }
+
+    void premio;
+  };
+
+  const dealCards = async () => {
+    if (saldo < currentBet) {
       alert("Saldo insuficiente para esta apuesta.");
       return;
     }
-    
-    updateBalance(-currentBet); // Cobrar apuesta
-    
-    let currentDeck = deck.length < 20 ? createDeck() : [...deck];
-    
-    const pHand = [currentDeck.pop()!, currentDeck.pop()!];
-    const dHand = [currentDeck.pop()!, { ...currentDeck.pop()!, isHidden: true }];
-    
-    setPlayerHand(pHand);
-    setDealerHand(dHand);
-    setDeck(currentDeck);
-    setGameState("playing");
+
+    limpiarError();
     setMessage("");
 
-    // Revisar Blackjack natural
-    const pScore = calculateScore(pHand);
-    if (pScore === 21) {
-      handleGameOver(pHand, dHand, "blackjack");
-    }
+    const nueva = await apostar({ monto_centavos: aCentavos(currentBet) });
+    if (nueva) aplicarPaso(nueva);
   };
 
-  const hit = () => {
-    const newHand = [...playerHand, deck.pop()!];
-    setPlayerHand(newHand);
-    setDeck([...deck]);
-    
-    if (calculateScore(newHand) > 21) {
-      handleGameOver(newHand, dealerHand, "bust");
-    }
+  const hit = async () => {
+    const nueva = await accionar("pedir");
+    if (nueva) aplicarPaso(nueva);
   };
 
-  const stand = () => {
+  const stand = async () => {
     setGameState("dealerTurn");
-    let currentDealerHand = [...dealerHand];
-    currentDealerHand[1].isHidden = false; // Revelar carta
-
-    let dScore = calculateScore(currentDealerHand);
-    let currentDeck = [...deck];
-
-    // El crupier pide hasta tener 17
-    while (dScore < 17) {
-      currentDealerHand.push(currentDeck.pop()!);
-      dScore = calculateScore(currentDealerHand);
-    }
-
-    setDealerHand(currentDealerHand);
-    setDeck(currentDeck);
-    handleGameOver(playerHand, currentDealerHand, "evaluate");
+    const nueva = await accionar("plantarse");
+    if (nueva) aplicarPaso(nueva);
+    else setGameState("playing");
   };
 
-  const doubleDown = () => {
-    if (balance < currentBet) return;
-    updateBalance(-currentBet);
-    setCurrentBet(currentBet * 2);
-    
-    const newHand = [...playerHand, deck.pop()!];
-    setPlayerHand(newHand);
-    
-    if (calculateScore(newHand) > 21) {
-      handleGameOver(newHand, dealerHand, "bust");
-    } else {
-      stand(); // Doblar obliga a plantarse después de una carta
-    }
-  };
-
-  const handleGameOver = (pHand: Card[], dHand: Card[], reason: string) => {
-    setGameState("gameOver");
-    const pScore = calculateScore(pHand);
-    const dScore = calculateScore(dHand.map(c => ({...c, isHidden: false})));
-
-    // Progreso de la mano en el resultado de la sesión (PATCH /resultados/:id).
-    void registrarProgreso(pScore, { motivo: reason, puntaje_crupier: dScore });
-
-    if (reason === "bust") {
-      setMessage("¡Te pasaste! Pierdes.");
-    } else if (reason === "blackjack") {
-      setMessage("¡BLACKJACK!");
-      const winAmount = currentBet + (currentBet * 1.5); // Paga 3 a 2
-      updateBalance(winAmount);
-      addNotification(`¡Ganaste ${formatMoney(currentBet * 1.5)} en Blackjack VIP!`);
-    } else if (reason === "evaluate") {
-      if (dScore > 21 || pScore > dScore) {
-        setMessage("¡Ganaste!");
-        updateBalance(currentBet * 2);
-        addNotification(`¡Ganaste ${formatMoney(currentBet)} en Blackjack VIP!`);
-      } else if (dScore > pScore) {
-        setMessage("El Crupier Gana.");
-      } else {
-        setMessage("Empate.");
-        updateBalance(currentBet); // Devolver apuesta
-      }
-    }
+  const doubleDown = async () => {
+    // El servidor cobra la segunda mitad al doblar y rechaza si no alcanza.
+    const nueva = await accionar("doblar");
+    if (nueva) aplicarPaso(nueva);
   };
 
   const resetGame = () => {
@@ -255,56 +297,66 @@ export default function BlackjackVIP() {
     setDealerHand([]);
     setGameState("betting");
     setMessage("");
-    if (currentBet % 2 !== 0 || currentBet > balance) setCurrentBet(500); 
+    if (currentBet % 2 !== 0 || currentBet > saldo) setCurrentBet(500);
   };
 
-  if (!user) return <div className="h-screen bg-[#05050A]"></div>;
-
-  // PANTALLA DE PERMISO DE UBICACIÓN (BLOQUEO TOTAL SIN SCROLL)
-  if (locationStatus === "prompt" || locationStatus === "denied") {
-    return (
-      <div className="fixed inset-0 z-[100] bg-[#05050A] flex items-center justify-center p-4 bg-[url('/fondo.png')] bg-cover bg-center">
-        <div className="absolute inset-0 bg-black/80 backdrop-blur-md"></div>
-        <div className="bg-[#0B0E14] border border-[#8A2BE2]/30 rounded-3xl p-8 max-w-md w-full text-center relative z-10 shadow-[0_0_50px_rgba(138,43,226,0.15)] animate-in zoom-in-95 duration-300">
-          <div className="w-20 h-20 bg-[#1E1133] rounded-full flex items-center justify-center mx-auto mb-6 border border-[#8A2BE2]/30 shadow-inner">
-            <MapPin size={32} className="text-[#A78BFA]" />
-          </div>
-          <h2 className="text-2xl font-black text-white mb-2">Acceso Restringido</h2>
-          <p className="text-gray-400 text-sm mb-8 leading-relaxed">
-            La <strong>Sala de Blackjack VIP</strong> requiere verificar que te encuentras en un territorio permitido antes de repartir las cartas.
-          </p>
-          
-          {locationStatus === "denied" ? (
-            <div className="bg-red-950/30 border border-red-500/30 p-4 rounded-xl mb-6 flex items-start gap-3 text-left">
-              <ShieldAlert size={20} className="text-red-400 shrink-0 mt-0.5" />
-              <p className="text-xs text-red-300">
-                {lecturaDeUbicacion ?? "Permiso denegado. Habilita la ubicación en tu navegador para continuar."}
-              </p>
-            </div>
-          ) : null}
-
-          <div className="space-y-3">
-            <button
-              onClick={() => void requestLocation()}
-              className="w-full bg-[#3B2063] hover:bg-[#4A297C] text-white font-bold py-3.5 rounded-xl uppercase tracking-widest text-xs transition-colors shadow-lg"
-            >
-              Permitir Ubicación
-            </button>
-            <button 
-              onClick={() => router.push("/juegos")}
-              className="w-full bg-transparent hover:bg-white/5 border border-white/10 text-gray-400 hover:text-white font-bold py-3.5 rounded-xl uppercase tracking-widest text-xs transition-colors"
-            >
-              Volver al Lobby
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (resolviendo || !user) return <div className="h-screen bg-[#05050A]" />;
 
   // INTERFAZ DEL JUEGO
   return (
     <div className="h-[calc(100vh-5rem)] bg-[#05050A] text-white flex flex-col font-sans selection:bg-[#8A2BE2]/30 overflow-hidden">
+
+      {/*
+        Petición de ubicación como banner, no como muro.
+
+        Antes esto era una pantalla de bloqueo total: sin geolocalización no se
+        repartía una sola carta. Contradecía el aviso del propio sitio ("rechazar
+        no te penaliza: puedes seguir jugando igual") e impedía el acceso al
+        producto por un permiso que la mesa no necesita para funcionar.
+      */}
+      {locationStatus !== "granted" && (
+        <div className="shrink-0 flex flex-wrap items-center gap-3 border-b border-[#8A2BE2]/20 bg-[#1E1133]/40 px-6 py-2.5">
+          <MapPin size={14} className="text-[#A78BFA] shrink-0" />
+          <p className="flex-1 min-w-[220px] text-[11px] leading-relaxed text-gray-300">
+            {locationStatus === "denied" ? (
+              <>
+                <ShieldAlert size={12} className="inline mr-1 text-red-400" />
+                {lecturaDeUbicacion ?? "No se concedió la ubicación."} <strong className="text-gray-200">La mesa sigue abierta</strong>.
+              </>
+            ) : (
+              <>
+                Esta sala pide tu <strong className="text-gray-200">ubicación</strong> &quot;para validar tu región&quot;.
+                No hace falta para jugar: puedes repartir igual.
+              </>
+            )}
+          </p>
+          {locationStatus === "prompt" && (
+            <button
+              onClick={() => void requestLocation()}
+              className="rounded-lg border border-[#8A2BE2]/40 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-[#A78BFA] transition-colors hover:bg-[#8A2BE2]/20"
+            >
+              Permitir ubicación
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* El fallo de telemetría se informa; nunca cierra la mesa. */}
+      {avisoDePermiso && (
+        <div className="shrink-0 bg-amber-950/40 border-b border-amber-500/30 px-6 py-2 text-[11px] text-amber-200">
+          El navegador respondió tu permiso, pero el laboratorio no pudo registrarlo: {avisoDePermiso}
+        </div>
+      )}
+
+      {/* Errores de la apuesta: saldo insuficiente, mano ya abierta, red caída. */}
+      {errorDeRonda && (
+        <div className="shrink-0 bg-red-950/40 border-b border-red-500/30 px-6 py-2 text-[11px] text-red-200 flex items-center justify-between gap-4">
+          <span>{errorDeRonda}</span>
+          <button onClick={limpiarError} className="text-red-300 hover:text-white font-bold uppercase tracking-widest">
+            Cerrar
+          </button>
+        </div>
+      )}
       
       {/* Top Header */}
       <header className="h-16 flex items-center justify-between px-6 bg-[#0B0E14] border-b border-white/5 shrink-0 z-20 relative">
@@ -489,18 +541,18 @@ export default function BlackjackVIP() {
           
           <div className="flex flex-wrap justify-center md:justify-start gap-3 w-full md:w-auto">
             {gameState === "betting" ? (
-              <button onClick={dealCards} disabled={currentBet === 0} className="bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-black py-3 sm:py-4 px-8 sm:px-10 rounded-xl uppercase tracking-widest text-xs sm:text-sm shadow-[0_0_20px_rgba(212,175,55,0.3)] transition-all disabled:opacity-50 disabled:grayscale">
-                Repartir
+              <button onClick={() => void dealCards()} disabled={currentBet === 0 || apostando} className="bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-black py-3 sm:py-4 px-8 sm:px-10 rounded-xl uppercase tracking-widest text-xs sm:text-sm shadow-[0_0_20px_rgba(212,175,55,0.3)] transition-all disabled:opacity-50 disabled:grayscale">
+                {apostando ? "Repartiendo…" : "Repartir"}
               </button>
             ) : gameState === "playing" ? (
               <>
-                <button onClick={hit} className="bg-[#1B3B2B] hover:bg-[#25523B] border border-green-500/30 text-green-400 flex items-center gap-2 py-3 px-4 sm:px-6 rounded-xl font-bold uppercase tracking-wider text-[10px] sm:text-xs transition-colors">
+                <button onClick={() => void hit()} className="bg-[#1B3B2B] hover:bg-[#25523B] border border-green-500/30 text-green-400 flex items-center gap-2 py-3 px-4 sm:px-6 rounded-xl font-bold uppercase tracking-wider text-[10px] sm:text-xs transition-colors">
                   <Plus size={16} /> Pedir
                 </button>
-                <button onClick={stand} className="bg-[#3B1B1B] hover:bg-[#522525] border border-red-500/30 text-red-400 flex items-center gap-2 py-3 px-4 sm:px-6 rounded-xl font-bold uppercase tracking-wider text-[10px] sm:text-xs transition-colors">
+                <button onClick={() => void stand()} className="bg-[#3B1B1B] hover:bg-[#522525] border border-red-500/30 text-red-400 flex items-center gap-2 py-3 px-4 sm:px-6 rounded-xl font-bold uppercase tracking-wider text-[10px] sm:text-xs transition-colors">
                   <X size={16} /> Plantarse
                 </button>
-                <button onClick={doubleDown} disabled={balance < currentBet} className="bg-[#3A3018] hover:bg-[#524422] border border-[#D4AF37]/30 text-[#D4AF37] flex items-center gap-2 py-3 px-4 sm:px-6 rounded-xl font-bold uppercase tracking-wider text-[10px] sm:text-xs transition-colors disabled:opacity-50">
+                <button onClick={() => void doubleDown()} disabled={apostando || saldo < currentBet} className="bg-[#3A3018] hover:bg-[#524422] border border-[#D4AF37]/30 text-[#D4AF37] flex items-center gap-2 py-3 px-4 sm:px-6 rounded-xl font-bold uppercase tracking-wider text-[10px] sm:text-xs transition-colors disabled:opacity-50">
                   <span className="font-black">2x</span> Doblar
                 </button>
                 <button disabled className="bg-[#1C2333] border border-blue-500/20 text-blue-500/50 flex items-center gap-2 py-3 px-4 sm:px-6 rounded-xl font-bold uppercase tracking-wider text-[10px] sm:text-xs cursor-not-allowed">
@@ -542,7 +594,7 @@ export default function BlackjackVIP() {
 
         <div className="max-w-6xl mx-auto mt-4 sm:mt-6 flex justify-between items-center text-[9px] sm:text-[10px] text-gray-600 font-mono uppercase tracking-widest border-t border-white/5 pt-3 sm:pt-4 hidden md:flex">
           <span>ID DE MANO: #BJVIP1-{Math.floor(Math.random() * 10000000)}</span>
-          <span className="text-[#D4AF37]">SALDO: {formatMoney(balance)}</span>
+          <span className="text-[#D4AF37]">SALDO: {formatMoney(saldo)}</span>
           <span>APUESTA TOTAL: {formatMoney(currentBet)}</span>
           <span>{new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} (CST)</span>
         </div>

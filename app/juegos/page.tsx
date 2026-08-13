@@ -10,6 +10,7 @@ import { SALAS, salaDe } from "@/lib/salas";
 export default function JuegosPage() {
   const router = useRouter();
   const { user } = useAuthStore();
+  const rol = useAuthStore((s) => s.cuenta?.rol);
 
   // GET /juegos: el catálogo es del backend (nombre, descripción, requisito) y
   // el front solo aporta la parte visual de cada sala.
@@ -38,6 +39,24 @@ export default function JuegosPage() {
   return (
     <div className="min-h-[calc(100vh-5rem)] max-w-[1600px] mx-auto pb-12 px-4 sm:px-6 lg:px-8">
       
+      {/*
+        Los tres roles del laboratorio, dichos donde importan.
+
+        `participante`, `investigador` y `admin` son roles del estudio, no del
+        negocio de casino, y esa diferencia solo se notaba al chocar contra un
+        403. El backend impide que el personal juegue —sus partidas entrarían en
+        la misma muestra que las de los participantes y ya no habría forma de
+        separarlas— pero hasta ahora nada lo explicaba antes de intentarlo.
+      */}
+      {rol && rol !== "participante" && (
+        <div className="mt-8 mb-2 rounded-xl border border-amber-500/30 bg-amber-950/30 px-5 py-4 text-sm text-amber-200 leading-relaxed">
+          <strong className="block mb-1">Cuenta de {rol}: acceso de solo lectura al piso de juego</strong>
+          Puedes recorrer las salas y consultar los datos del estudio, pero no apostar. Las partidas
+          del personal de investigación y administración se mezclarían con las de los participantes,
+          y los resultados dejarían de ser una muestra limpia. Para jugar, usa una cuenta de participante.
+        </div>
+      )}
+
       {/* Cabecera de la sección */}
       <div className="mb-10 text-center sm:text-left mt-8">
         <p className="text-[#D4AF37] text-[10px] font-bold tracking-widest uppercase mb-3 flex items-center justify-center sm:justify-start gap-2">

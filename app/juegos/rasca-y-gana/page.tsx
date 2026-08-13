@@ -4,25 +4,36 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronLeft, Star, Maximize, Plus,
-  ChevronDown, Info, Volume2, Lock,
+  ChevronDown, Info, Lock,
   Minus, Crown, Gem, Clover, Banknote,
-  Coins, Landmark, Briefcase, X
+  Coins, Landmark, Briefcase, X, Bell, Sparkle
 } from "lucide-react";
-import { useAuthStore } from "@/lib/authStore";
 import { useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
-import { usePartida } from "@/lib/usePartida";
+import { useSalaDeJuego } from "@/lib/useSalaDeJuego";
+import { useSesionRequerida } from "@/lib/useSesionRequerida";
 import { pedirPermiso } from "@/lib/permisosLab";
 import { registrarEvento } from "@/lib/eventos";
 
 // --- CONFIGURACIÓN DE LOS BOLETOS ---
+/**
+ * Los boletos que sabe dibujar esta pantalla.
+ *
+ * `price` tiene que coincidir con el precio del motor del servidor, que es quien
+ * cobra de verdad. `maxPrize` ya no es un numero suelto: se deriva del precio
+ * con el multiplicador de la corona (20.000x), que es exactamente lo que puede
+ * pagar el boleto. Antes se anunciaban topes que no correspondian a ninguna
+ * tabla de premios, asi que la portada prometia cifras que el juego no podia dar.
+ */
+const MULTIPLICADOR_MAXIMO = 20_000;
+
 const TICKETS = [
-  { id: "rey", name: "Rey de Oro", maxPrize: "1,000,000", price: 50, color: "text-yellow-500", border: "border-yellow-500/30", bg: "bg-yellow-900/20", icon: Crown, categories: ["Todos", "Mega Premios", "Nuevos"], popularity: 100 },
-  { id: "diamante", name: "Diamante Azul", maxPrize: "500,000", price: 20, color: "text-blue-500", border: "border-blue-500/30", bg: "bg-blue-900/20", icon: Gem, categories: ["Todos", "Diamante", "Clásicos"], popularity: 85 },
-  { id: "fortuna", name: "Fortuna 7", maxPrize: "250,000", price: 10, color: "text-green-500", border: "border-green-500/30", bg: "bg-green-900/20", icon: Clover, categories: ["Todos", "Clásicos"], popularity: 90 },
-  { id: "mega", name: "Mega 777", maxPrize: "100,000", price: 5, color: "text-red-500", border: "border-red-500/30", bg: "bg-red-900/20", icon: Banknote, categories: ["Todos", "Clásicos", "Mega Premios"], popularity: 75 },
-  { id: "suerte", name: "Suerte Total", maxPrize: "50,000", price: 2, color: "text-purple-500", border: "border-purple-500/30", bg: "bg-purple-900/20", icon: Star, categories: ["Todos", "Nuevos"], popularity: 60 },
-];
+  { id: "rey", name: "Rey de Oro", price: 50, color: "text-yellow-500", border: "border-yellow-500/30", bg: "bg-yellow-900/20", icon: Crown, categories: ["Todos", "Mega Premios", "Nuevos"], popularity: 100 },
+  { id: "diamante", name: "Diamante Azul", price: 20, color: "text-blue-500", border: "border-blue-500/30", bg: "bg-blue-900/20", icon: Gem, categories: ["Todos", "Diamante", "Clásicos"], popularity: 85 },
+  { id: "fortuna", name: "Fortuna 7", price: 10, color: "text-green-500", border: "border-green-500/30", bg: "bg-green-900/20", icon: Clover, categories: ["Todos", "Clásicos"], popularity: 90 },
+  { id: "mega", name: "Mega 777", price: 5, color: "text-red-500", border: "border-red-500/30", bg: "bg-red-900/20", icon: Banknote, categories: ["Todos", "Clásicos", "Mega Premios"], popularity: 75 },
+  { id: "suerte", name: "Suerte Total", price: 2, color: "text-purple-500", border: "border-purple-500/30", bg: "bg-purple-900/20", icon: Star, categories: ["Todos", "Nuevos"], popularity: 60 },
+].map((boleto) => ({ ...boleto, maxPrize: (boleto.price * MULTIPLICADOR_MAXIMO).toLocaleString("es-MX") }));
 
 const CATEGORIES = ["Todos", "Clásicos", "Diamante", "Mega Premios", "Nuevos"];
 const SORT_OPTIONS = [
@@ -32,21 +43,31 @@ const SORT_OPTIONS = [
 ];
 
 // --- SÍMBOLOS Y PREMIOS DEL JUEGO ---
-const REWARD_SYMBOLS = [
-  { id: "bars", icon: Landmark, name: "Lingotes", val: 1000 },
-  { id: "coins", icon: Coins, name: "Monedas", val: 500 },
-  { id: "crown", icon: Crown, name: "Corona", val: 1000000 },
-  { id: "chips", icon: Coins, name: "Fichas", val: 10000 },
-  { id: "diamond", icon: Gem, name: "Diamante", val: 250 },
-  { id: "chest", icon: Briefcase, name: "Cofre", val: 5000 },
-];
+/**
+ * Los simbolos del carton, por el id que usa el servidor.
+ *
+ * `multiplicador` es lo que paga una tercia, en multiplos del precio del boleto,
+ * y esta aqui solo para poder escribir la cifra debajo de cada casilla. La tabla
+ * que manda es la del motor: si las dos se separan, lo que se cobra es la suya.
+ */
+const REWARD_SYMBOLS: Record<string, { icon: React.ElementType; name: string; multiplicador: number }> = {
+  diamante: { icon: Gem, name: "Diamante", multiplicador: 1 },
+  monedas: { icon: Coins, name: "Monedas", multiplicador: 2 },
+  lingotes: { icon: Landmark, name: "Lingotes", multiplicador: 2 },
+  campana: { icon: Bell, name: "Campana", multiplicador: 3 },
+  trebol: { icon: Clover, name: "Trébol", multiplicador: 4 },
+  anillo: { icon: Sparkle, name: "Anillo", multiplicador: 4 },
+  cofre: { icon: Briefcase, name: "Cofre", multiplicador: 5 },
+  fichas: { icon: Coins, name: "Fichas", multiplicador: 200 },
+  corona: { icon: Crown, name: "Corona", multiplicador: 20_000 },
+};
 
 const currency = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: 0 });
 
 export default function RascaYGanaPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
-  const { balance, setBalance } = useBalanceStore();
+  const { user, resolviendo } = useSesionRequerida();
+  const saldo = useBalanceStore((s) => s.saldo);
   const { addNotification } = useNotificationStore(); // <-- Integración de notificaciones globales
 
   const [activeCategory, setActiveCategory] = useState("Todos");
@@ -55,16 +76,28 @@ export default function RascaYGanaPage() {
 
   // Otra sala de acceso libre: sin permisos, pero acumula cookies y claves de
   // almacenamiento mientras se juega.
-  const { juegoId, iniciar, registrarProgreso } = usePartida("rasca-y-gana");
+  const { juegoId, apostando, error: errorDeRonda, apostar, limpiarError, partida } =
+    useSalaDeJuego("rasca-y-gana");
+  const { iniciar, registrarProgreso } = partida;
   const capturaIniciada = useRef(false);
 
+  /**
+   * El guard se marca **después** de que `iniciar()` responda.
+   *
+   * Al revés, si el catálogo o la sesión todavía no estaban listos el inicio
+   * devolvía `null`, el ref ya valía `true` y la captura no se reintentaba en
+   * todo el montaje: la telemetría se perdía de forma intermitente.
+   */
   useEffect(() => {
     if (!user || capturaIniciada.current) return;
-    capturaIniciada.current = true;
 
     void (async () => {
       const resultado = await iniciar({ sala: "rasca-y-gana" });
-      const idDelJuego = resultado?.juego_id ?? juegoId;
+      if (!resultado) return;
+
+      capturaIniciada.current = true;
+
+      const idDelJuego = resultado.juego_id ?? juegoId;
       await pedirPermiso("cookies", { juegoId: idDelJuego });
       await pedirPermiso("localStorage", { juegoId: idDelJuego });
     })();
@@ -73,7 +106,7 @@ export default function RascaYGanaPage() {
   const [activeTicket, setActiveTicket] = useState(TICKETS[0]);
   const [quantity, setQuantity] = useState(1);
   const [gameState, setGameState] = useState<"idle" | "playing" | "revealed">("idle");
-  const [prizes, setPrizes] = useState<typeof REWARD_SYMBOLS>([]);
+  const [prizes, setPrizes] = useState<string[]>([]);
   const [winAmount, setWinAmount] = useState(0);
   const [favorite, setFavorite] = useState(false);
   
@@ -83,12 +116,8 @@ export default function RascaYGanaPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isDrawing = useRef(false);
 
-  useEffect(() => {
-    if (!user) router.replace("/login");
-  }, [user, router]);
-
   const filteredTickets = useMemo(() => {
-    let result = TICKETS.filter(t => t.categories.includes(activeCategory));
+    const result = TICKETS.filter(t => t.categories.includes(activeCategory));
     if (sortBy.id === "populares") result.sort((a, b) => b.popularity - a.popularity);
     else if (sortBy.id === "precio-asc") result.sort((a, b) => a.price - b.price);
     else if (sortBy.id === "precio-desc") result.sort((a, b) => b.price - a.price);
@@ -107,32 +136,6 @@ export default function RascaYGanaPage() {
     if (isSortMenuOpen) document.addEventListener("click", handleClickOutside);
     return () => document.removeEventListener("click", handleClickOutside);
   }, [isSortMenuOpen]);
-
-  const generateCard = () => {
-    const isWin = Math.random() > 0.6; 
-    let newPrizes = [];
-    let wonValue = 0;
-
-    if (isWin) {
-      const winningSymbol = REWARD_SYMBOLS[Math.floor(Math.random() * REWARD_SYMBOLS.length)];
-      wonValue = winningSymbol.val * quantity; 
-      newPrizes = [winningSymbol, winningSymbol, winningSymbol];
-      while (newPrizes.length < 6) {
-        const randomSym = REWARD_SYMBOLS[Math.floor(Math.random() * REWARD_SYMBOLS.length)];
-        if (randomSym.id !== winningSymbol.id) newPrizes.push(randomSym);
-      }
-    } else {
-      while (newPrizes.length < 6) {
-        const randomSym = REWARD_SYMBOLS[Math.floor(Math.random() * REWARD_SYMBOLS.length)];
-        const count = newPrizes.filter(p => p.id === randomSym.id).length;
-        if (count < 2) newPrizes.push(randomSym);
-      }
-    }
-
-    newPrizes.sort(() => Math.random() - 0.5);
-    setPrizes(newPrizes);
-    setWinAmount(wonValue);
-  };
 
   const drawCover = useCallback(() => {
     const canvas = canvasRef.current;
@@ -227,9 +230,11 @@ export default function RascaYGanaPage() {
       canvas.style.transition = "none";
       canvas.style.opacity = "1";
 
+      // El premio ya se acreditó cuando el servidor resolvió la ronda: rascar
+      // solo descubre lo que había. Antes el saldo se sumaba aquí, así que el
+      // dinero aparecía al terminar de rascar y no al comprar el boleto.
       if (winAmount > 0) {
-        setBalance((prev) => prev + winAmount);
-        void registrarProgreso(winAmount, { boleto: activeTicket.id, cantidad: quantity });
+        void registrarProgreso(Math.round(winAmount), { boleto: activeTicket.id, cantidad: quantity });
 
         // <-- Llamada a la notificación global del Navbar -->
         addNotification(`¡Felicidades! Ganaste ${currency.format(winAmount)} en el boleto ${activeTicket.name}.`);
@@ -244,16 +249,34 @@ export default function RascaYGanaPage() {
     }, 500);
   };
 
-  const playTicket = () => {
+  /**
+   * Comprar el boleto.
+   *
+   * El cartón se pide al servidor **antes** de dibujar la capa que se rasca, así
+   * que las seis casillas que hay debajo son las que el motor sorteó y el premio
+   * es el que ya se acreditó. La versión anterior decidía primero si el boleto
+   * ganaba y luego rellenaba el cartón para que cuadrara: lo que se veía al
+   * rascar era una consecuencia del premio y no su causa.
+   */
+  const playTicket = async () => {
     const totalCost = activeTicket.price * quantity;
-    if (balance < totalCost) {
+
+    if (saldo < totalCost) {
       alert("Saldo insuficiente para comprar este boleto.");
       return;
     }
 
-    setBalance((prev) => prev - totalCost);
+    limpiarError();
+
+    const ronda = await apostar({ boleto: activeTicket.id, cantidad: quantity });
+    if (!ronda) return;
+
     registrarEvento("compra_boleto", { boleto: activeTicket.id, cantidad: quantity, costo: totalCost }, juegoId);
-    generateCard();
+
+    const desenlace = ronda.desenlace as { casillas: string[] } | null;
+
+    setPrizes(desenlace?.casillas ?? []);
+    setWinAmount(ronda.premio_mxn);
     setGameState("playing");
     drawCover();
   };
@@ -264,7 +287,7 @@ export default function RascaYGanaPage() {
     setPrizes([]);
   };
 
-  if (!user) return <div className="h-screen bg-[#05050A]"></div>;
+  if (resolviendo || !user) return <div className="h-screen bg-[#05050A]" />;
 
   return (
     <div className="h-screen w-full flex flex-col bg-[#08080C] text-white font-sans overflow-hidden">
@@ -290,7 +313,7 @@ export default function RascaYGanaPage() {
         <div className="flex items-center justify-end gap-2 lg:gap-3 w-1/3">
           <div className="hidden lg:flex items-center bg-[#131722] rounded-lg px-3 py-1 border border-white/10 mr-2">
             <span className="text-[9px] text-gray-500 uppercase tracking-widest mr-2">Saldo:</span>
-            <span className="font-bold text-[#D4AF37] text-xs">{currency.format(balance)}</span>
+            <span className="font-bold text-[#D4AF37] text-xs">{currency.format(saldo)}</span>
           </div>
           <button onClick={() => setFavorite(!favorite)} className="w-9 h-9 border border-white/10 rounded-lg flex items-center justify-center hover:bg-white/5 transition-colors">
             <Star size={14} fill={favorite ? "currentColor" : "none"} className={favorite ? "text-[#D4AF37]" : "text-gray-400"} />
@@ -300,6 +323,16 @@ export default function RascaYGanaPage() {
           </button>
         </div>
       </header>
+
+      {/* Errores de la compra: saldo insuficiente, sala cerrada, red caída. */}
+      {errorDeRonda && (
+        <div className="shrink-0 bg-red-950/40 border-b border-red-500/30 px-4 py-2 text-[11px] text-red-200 flex items-center justify-between gap-4">
+          <span>{errorDeRonda}</span>
+          <button onClick={limpiarError} className="text-red-300 hover:text-white font-bold uppercase tracking-widest">
+            Cerrar
+          </button>
+        </div>
+      )}
 
       {/* CONTENIDO PRINCIPAL */}
       <main className="flex-1 w-full max-w-[1400px] mx-auto p-4 flex flex-col gap-4 min-h-0 overflow-hidden">
@@ -436,12 +469,18 @@ export default function RascaYGanaPage() {
 
                 <div className="relative w-[90%] max-w-[600px] h-[180px] sm:h-[220px] bg-[#e5e7eb] rounded-lg border-[4px] border-gray-300 shadow-[inset_0_0_20px_rgba(0,0,0,0.6)] overflow-hidden shrink-0">
                   <div className="absolute inset-0 grid grid-cols-3 grid-rows-2 gap-2 sm:gap-4 p-4">
-                    {prizes.length > 0 ? prizes.map((prize, idx) => {
-                      const PrizeIcon = prize.icon;
+                    {prizes.length > 0 ? prizes.map((casilla, idx) => {
+                      // La casilla llega como id del servidor; el premio que se
+                      // escribe debajo es el multiplicador por el precio del
+                      // boleto, que es exactamente lo que pagaría una tercia.
+                      const simbolo = REWARD_SYMBOLS[casilla] ?? REWARD_SYMBOLS.diamante;
+                      const PrizeIcon = simbolo.icon;
+                      const premio = simbolo.multiplicador * activeTicket.price * quantity;
+
                       return (
                         <div key={idx} className="flex flex-col items-center justify-center gap-1 sm:gap-2">
                           <PrizeIcon size={36} className="text-[#a37628] drop-shadow-md" />
-                          <span className="text-black font-black text-sm sm:text-lg">{currency.format(prize.val)}</span>
+                          <span className="text-black font-black text-sm sm:text-lg">{currency.format(premio)}</span>
                         </div>
                       );
                     }) : (
@@ -524,8 +563,8 @@ export default function RascaYGanaPage() {
               <div className="flex flex-col w-full md:w-auto gap-1">
                 {gameState === "idle" ? (
                   <button 
-                    onClick={playTicket}
-                    disabled={balance < (activeTicket.price * quantity)}
+                    onClick={() => void playTicket()}
+                    disabled={apostando || saldo < activeTicket.price * quantity}
                     className="w-full md:w-60 bg-gradient-to-b from-[#f4d477] to-[#d4af37] hover:from-[#FFF1A0] hover:to-[#e5c05c] text-black font-black py-3 rounded-xl shadow-[0_5px_15px_rgba(212,175,55,0.3)] transition-all tracking-widest text-sm disabled:opacity-50 disabled:grayscale active:scale-95"
                   >
                     JUGAR AHORA
@@ -585,7 +624,7 @@ export default function RascaYGanaPage() {
               </button>
             </div>
             <div className="p-6 overflow-y-auto text-sm text-gray-300 space-y-4 custom-scrollbar">
-              <p><strong>1. Aceptación de los Términos</strong><br/>Al acceder y utilizar el juego "Rasca y Gana" de Royal Casino, el usuario acepta cumplir con estos términos y condiciones establecidos en nuestra plataforma digital.</p>
+              <p><strong>1. Aceptación de los Términos</strong><br/>Al acceder y utilizar el juego &quot;Rasca y Gana&quot; de Royal Casino, el usuario acepta cumplir con estos términos y condiciones establecidos en nuestra plataforma digital.</p>
               <p><strong>2. Elegibilidad</strong><br/>El usuario debe tener al menos 18 años de edad y residir en una jurisdicción donde el juego en línea sea estrictamente legal. Es responsabilidad del jugador verificar las leyes de su localidad.</p>
               <p><strong>3. Compra de Boletos y Asignación de Premios</strong><br/>Las compras de los boletos digitales son definitivas y no reembolsables. Los premios se asignan de manera completamente aleatoria a través de nuestro generador de números aleatorios (RNG) certificado. El premio máximo y la tabla de pagos varían en función del boleto adquirido.</p>
               <p><strong>4. Juego Responsable</strong><br/>Royal Casino promueve en todo momento el juego responsable. Establece límites, no juegues dinero que no puedas permitirte perder, y si crees que tienes un problema con el juego, busca ayuda profesional inmediatamente.</p>
