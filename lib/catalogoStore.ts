@@ -1,6 +1,6 @@
 // lib/catalogoStore.ts
 import { create } from "zustand";
-import { api } from "./api";
+import { ApiError, api } from "./api";
 import type { Juego } from "./api";
 
 /**
@@ -22,7 +22,10 @@ interface CatalogoState {
   cargando: boolean;
   cargado: boolean;
   error: string | null;
+  /** El catalogo no se pudo leer por falta de identidad, no por un fallo. */
+  requiereSesion: boolean;
   cargar: () => Promise<void>;
+  reintentar: () => Promise<void>;
   idDe: (slug: string) => string | null;
 }
 
@@ -34,6 +37,7 @@ export const useCatalogoStore = create<CatalogoState>((set, get) => ({
   cargando: false,
   cargado: false,
   error: null,
+  requiereSesion: false,
 
   cargar: async () => {
     if (get().cargado || cargaEnVuelo) return cargaEnVuelo ?? undefined;
@@ -47,12 +51,24 @@ export const useCatalogoStore = create<CatalogoState>((set, get) => ({
           porSlug: Object.fromEntries(juegos.map((juego) => [juego.slug, juego])),
           cargando: false,
           cargado: true,
+          error: null,
+          requiereSesion: false,
         });
       } catch (error) {
-        // Leer el catalogo exige token: antes de entrar es normal que falle.
+        // `GET /juegos` exige identidad: antes de entrar el 401 es lo normal, no
+        // un fallo. Se distingue de los demas errores porque la UI tiene que
+        // decir cosas opuestas —"inicia sesion" contra "el backend no
+        // responde"— y confundirlas manda a buscar el problema donde no esta.
+        const esFaltaDeSesion = error instanceof ApiError && error.esNoAutenticado;
+
         set({
           cargando: false,
-          error: error instanceof Error ? error.message : "No se pudo cargar el catalogo",
+          error: esFaltaDeSesion
+            ? null
+            : error instanceof Error
+              ? error.message
+              : "No se pudo cargar el catalogo",
+          requiereSesion: esFaltaDeSesion,
         });
       } finally {
         cargaEnVuelo = null;
@@ -60,6 +76,17 @@ export const useCatalogoStore = create<CatalogoState>((set, get) => ({
     })();
 
     return cargaEnVuelo;
+  },
+
+  /**
+   * Reintento explicito tras un fallo.
+   *
+   * `cargar()` se corta si ya hay una carga hecha o en vuelo, asi que sin esto
+   * un fallo de red dejaba el catalogo vacio hasta recargar la pagina entera.
+   */
+  reintentar: async () => {
+    set({ cargado: false, error: null, requiereSesion: false });
+    return get().cargar();
   },
 
   idDe: (slug) => get().porSlug[slug]?.id ?? null,

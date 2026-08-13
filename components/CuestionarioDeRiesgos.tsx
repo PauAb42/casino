@@ -109,8 +109,22 @@ export default function CuestionarioDeRiesgos({ juegoId }: { juegoId?: string | 
             <span className="font-mono text-xs uppercase tracking-widest">Cargando catálogo de riesgos…</span>
           </div>
         ) : riesgos.length === 0 ? (
+          /*
+            Sin sesión no se pidió el catálogo, y un fallo tampoco lo deja vacío:
+            lo deja sin leer. Decir "siémbralo" en esos dos casos manda a
+            resembrar una base que ya estaba bien.
+          */
           <p className="mt-8 font-mono text-xs text-paper/40">
-            El catálogo de riesgos está vacío. Siémbralo en el backend con <code>npm run db:seed</code>.
+            {!sesionId ? (
+              <>Abre una sesión de laboratorio para responder el cuestionario.</>
+            ) : error ? (
+              <>No se pudo leer el catálogo de riesgos: {error}</>
+            ) : (
+              <>
+                El catálogo de riesgos está vacío. Siémbralo en el backend con{" "}
+                <code>npm run db:seed</code>.
+              </>
+            )}
           </p>
         ) : (
           <ul className="mt-8 space-y-4">

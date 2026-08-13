@@ -691,6 +691,9 @@ export const api = {
   salud,
 };
 
-export { ApiError } from "./client";
+// `API_RAIZ` se reexporta para que un mensaje de error pueda decir *contra que
+// servidor* fallo. "No se pudo conectar" sin la URL obliga a ir a buscarla al
+// `.env.local`, y el fallo mas comun es justo que esa URL apunta a otro sitio.
+export { API_BASE, API_RAIZ, ApiError } from "./client";
 export type { CodigoDeError, DetalleDeError } from "./client";
 export * from "./types";

@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { RefreshCw, ShieldAlert } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
+import { API_RAIZ } from "@/lib/api";
 import { useCatalogoStore } from "@/lib/catalogoStore";
 import { SALAS, salaDe } from "@/lib/salas";
 
@@ -18,6 +19,9 @@ export default function JuegosPage() {
   const cargando = useCatalogoStore((s) => s.cargando);
   const cargado = useCatalogoStore((s) => s.cargado);
   const cargar = useCatalogoStore((s) => s.cargar);
+  const error = useCatalogoStore((s) => s.error);
+  const requiereSesion = useCatalogoStore((s) => s.requiereSesion);
+  const reintentar = useCatalogoStore((s) => s.reintentar);
 
   useEffect(() => {
     if (user) void cargar();
@@ -79,11 +83,59 @@ export default function JuegosPage() {
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Cargando catálogo…</p>
         </div>
       ) : salas.length === 0 ? (
+        /*
+          Cuatro motivos distintos para una lista vacía, y decir el que no es
+          manda a buscar el problema donde no está.
+
+          La versión anterior siempre decía "corre npm run db:seed", incluso
+          cuando el catálogo estaba sembrado y lo único que faltaba era iniciar
+          sesión: `GET /juegos` exige identidad y devuelve 401, no una lista
+          vacía. Sembrar de nuevo no arreglaba nada porque nada estaba roto.
+        */
         <div className="rounded-3xl border border-white/5 bg-[#0B0E14] p-12 text-center">
-          <p className="text-sm text-gray-400">
-            El catálogo del laboratorio está vacío. Corre <code className="text-[#D4AF37]">npm run db:seed</code> en el
-            backend para sembrar las salas.
-          </p>
+          {requiereSesion || !user ? (
+            <>
+              <p className="text-sm text-gray-300 mb-2">Inicia sesión para ver las salas.</p>
+              <p className="text-xs text-gray-500 mb-6">
+                El catálogo es parte del recorrido del laboratorio y se lee con tu identidad.
+              </p>
+              <button
+                onClick={() => router.push("/login")}
+                className="rounded-xl bg-[#D4AF37] px-6 py-2.5 text-xs font-bold uppercase tracking-widest text-black transition-colors hover:bg-[#F3D55B]"
+              >
+                Iniciar sesión
+              </button>
+            </>
+          ) : error ? (
+            <>
+              <p className="text-sm text-red-300 mb-2">No se pudo leer el catálogo.</p>
+              <p className="text-xs text-gray-500 mb-6">
+                {error}
+                <br />
+                Revisa que el backend esté arriba en{" "}
+                <code className="text-[#D4AF37]">{API_RAIZ}</code> y que ese origen esté declarado
+                en su <code className="text-[#D4AF37]">CORS_ORIGIN</code>.
+              </p>
+              <button
+                onClick={() => void reintentar()}
+                className="rounded-xl border border-white/10 px-6 py-2.5 text-xs font-bold uppercase tracking-widest text-gray-300 transition-colors hover:bg-white/5"
+              >
+                Reintentar
+              </button>
+            </>
+          ) : juegos.length > 0 ? (
+            <p className="text-sm text-gray-400">
+              El catálogo tiene {juegos.length} juegos, pero ninguno con una sala que este frontend
+              sepa pintar. Revisa que los <code className="text-[#D4AF37]">slug</code> del backend
+              coincidan con los de <code className="text-[#D4AF37]">lib/salas.ts</code>.
+            </p>
+          ) : (
+            <p className="text-sm text-gray-400">
+              El catálogo del laboratorio está vacío. Corre{" "}
+              <code className="text-[#D4AF37]">npm run db:seed</code> en el backend para sembrar las
+              salas.
+            </p>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
