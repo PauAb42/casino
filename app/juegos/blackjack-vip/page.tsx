@@ -112,11 +112,31 @@ export default function BlackjackVIP() {
   const [gameState, setGameState] = useState<"betting" | "playing" | "dealerTurn" | "gameOver">("betting");
   const [playerHand, setPlayerHand] = useState<Card[]>([]);
   const [dealerHand, setDealerHand] = useState<Card[]>([]);
-  const [currentBet, setCurrentBet] = useState(500);
-  const [selectedChip, setSelectedChip] = useState(500);
+  const [currentBet, setCurrentBet] = useState(CHIP_VALUES[0]);
+  const [selectedChip, setSelectedChip] = useState(CHIP_VALUES[0]);
   const [message, setMessage] = useState("");
 
   const formatMoney = (amount: number) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(amount);
+
+  /**
+   * La apuesta se ajusta al saldo en vez de quedarse en una cifra impagable.
+   *
+   * Con el saldo de bienvenida ($100) y la ficha por defecto de $500, "Repartir"
+   * fallaba siempre: no se repartia ni una carta y la mesa parecia rota. Las
+   * fichas que no alcanzan se deshabilitan, como en la ruleta.
+   */
+  const fichaMinima = CHIP_VALUES[0];
+  const puedeApostar = saldo >= fichaMinima;
+
+  useEffect(() => {
+    if (currentBet <= saldo) return;
+
+    const alcanzable = [...CHIP_VALUES].reverse().find((valor) => valor <= saldo);
+    if (alcanzable) {
+      setSelectedChip(alcanzable);
+      setCurrentBet(alcanzable);
+    }
+  }, [saldo, currentBet]);
 
   // --- 1. SOLICITUD DE UBICACIÓN ---
   // Pasa por el laboratorio: se registra que la mesa pidió el permiso, cómo
@@ -268,7 +288,10 @@ export default function BlackjackVIP() {
 
   const dealCards = async () => {
     if (saldo < currentBet) {
-      alert("Saldo insuficiente para esta apuesta.");
+      setMessage(
+        `Tu saldo es de ${formatMoney(saldo)} y la apuesta es de ${formatMoney(currentBet)}. ` +
+          `Baja la apuesta o recarga en el cajero.`,
+      );
       return;
     }
 
@@ -309,7 +332,7 @@ export default function BlackjackVIP() {
 
   // INTERFAZ DEL JUEGO
   return (
-    <div className="h-[calc(100vh-5rem)] bg-[#05050A] text-white flex flex-col font-sans selection:bg-[#8A2BE2]/30 overflow-hidden">
+    <div className="bg-[#05050A] text-white flex flex-col font-sans selection:bg-[#8A2BE2]/30">
 
       {/*
         Petición de ubicación como banner, no como muro.
@@ -412,9 +435,9 @@ export default function BlackjackVIP() {
       )}
 
       {/* Game Area (La Mesa) */}
-      <main className="flex-1 relative flex items-center justify-center p-4 lg:p-10 overflow-hidden">
+      <main className="flex-1 relative flex items-center justify-center p-3 lg:p-6">
         
-        <div className="relative w-full max-w-6xl h-full min-h-[400px] bg-[radial-gradient(ellipse_at_center,_#1F2B4C,_#0A0F1F)] rounded-[4rem] sm:rounded-[6rem] border-[12px] border-[#181512] shadow-[0_0_80px_rgba(0,0,0,0.8)_inset] overflow-hidden flex flex-col items-center justify-between py-12">
+        <div className="relative w-full max-w-6xl h-[420px] xl:h-[460px] bg-[radial-gradient(ellipse_at_center,_#1F2B4C,_#0A0F1F)] rounded-[4rem] sm:rounded-[6rem] border-[12px] border-[#181512] shadow-[0_0_80px_rgba(0,0,0,0.8)_inset] overflow-hidden flex flex-col items-center justify-between py-6 sm:py-8">
           
           <div className="absolute inset-4 rounded-[3.5rem] sm:rounded-[5.5rem] border border-[#D4AF37]/20 pointer-events-none"></div>
 
@@ -509,7 +532,7 @@ export default function BlackjackVIP() {
                 </div>
                 <div className="flex justify-center -space-x-8">
                   {playerHand.map((card, i) => (
-                    <div key={i} className={`w-24 h-36 sm:w-28 sm:h-40 bg-white rounded-xl shadow-2xl flex items-center justify-center text-4xl sm:text-5xl border border-gray-200 transform transition-all hover:-translate-y-4 ${card.suit === '♥' || card.suit === '♦' ? 'text-red-600' : 'text-black'}`} style={{ zIndex: i }}>
+                    <div key={i} className={`w-20 h-32 sm:w-24 sm:h-36 bg-white rounded-xl shadow-2xl flex items-center justify-center text-4xl sm:text-5xl border border-gray-200 transform transition-all hover:-translate-y-4 ${card.suit === '♥' || card.suit === '♦' ? 'text-red-600' : 'text-black'}`} style={{ zIndex: i }}>
                       <div className="absolute top-2 left-2 flex flex-col items-center">
                         <span className="text-xl font-bold leading-none">{card.rank}</span>
                         <span className="text-xl">{card.suit}</span>
@@ -550,8 +573,14 @@ export default function BlackjackVIP() {
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 sm:gap-6">
           
           <div className="flex flex-wrap justify-center md:justify-start gap-3 w-full md:w-auto">
+            {gameState === "betting" && !puedeApostar && (
+              <p className="w-full text-center text-[11px] leading-relaxed text-amber-300 md:text-left">
+                Tu saldo es de {formatMoney(saldo)} y la ficha más pequeña de esta mesa es de{" "}
+                {formatMoney(fichaMinima)}. Recarga en el cajero para jugar.
+              </p>
+            )}
             {gameState === "betting" ? (
-              <button onClick={() => void dealCards()} disabled={currentBet === 0 || apostando} className="bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-black py-3 sm:py-4 px-8 sm:px-10 rounded-xl uppercase tracking-widest text-xs sm:text-sm shadow-[0_0_20px_rgba(212,175,55,0.3)] transition-all disabled:opacity-50 disabled:grayscale">
+              <button onClick={() => void dealCards()} disabled={currentBet === 0 || apostando || !puedeApostar} className="bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-black py-3 sm:py-4 px-8 sm:px-10 rounded-xl uppercase tracking-widest text-xs sm:text-sm shadow-[0_0_20px_rgba(212,175,55,0.3)] transition-all disabled:opacity-50 disabled:grayscale">
                 {apostando ? "Repartiendo…" : "Repartir"}
               </button>
             ) : gameState === "playing" ? (
@@ -578,7 +607,9 @@ export default function BlackjackVIP() {
               <button 
                 key={val} 
                 onClick={() => { setSelectedChip(val); setCurrentBet(val); }}
-                className={`w-10 h-10 sm:w-14 sm:h-14 rounded-full border-4 border-dashed flex items-center justify-center font-bold text-[10px] sm:text-xs transition-all ${
+                disabled={val > saldo}
+                title={val > saldo ? `No te alcanza: tu saldo es ${formatMoney(saldo)}` : undefined}
+                className={`w-10 h-10 sm:w-14 sm:h-14 rounded-full border-4 border-dashed flex items-center justify-center font-bold text-[10px] sm:text-xs transition-all disabled:opacity-30 disabled:grayscale disabled:cursor-not-allowed ${
                   selectedChip === val 
                     ? "border-purple-400 bg-purple-900 text-white scale-110 shadow-[0_0_15px_rgba(138,43,226,0.6)]" 
                     : "border-white/50 bg-[#131722] text-gray-300 hover:bg-[#1E1133] hover:border-white/80"

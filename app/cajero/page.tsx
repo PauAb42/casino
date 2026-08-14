@@ -10,6 +10,7 @@ import {
 import { aCentavos, useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
 import { useSesionRequerida } from "@/lib/useSesionRequerida";
+import { useAvisoPendiente } from "@/lib/useAvisoPendiente";
 import { ApiError, api } from "@/lib/api";
 import { cerrarMedios, notarMedios, pedirPermiso, streamDe } from "@/lib/permisosLab";
 
@@ -28,7 +29,11 @@ const WITHDRAWAL_METHODS = [
   { id: "crypto_retiro", name: "Billetera Crypto (USDT / BTC)", icon: Coins }
 ];
 
+/** Lo que impide pedir la cámara mientras el aviso sigue sin responder. */
+const TEXTO_AVISO = "Responde primero el aviso de privacidad que está en pantalla.";
+
 export default function CajeroPage() {
+  const avisoPendiente = useAvisoPendiente();
   const router = useRouter();
   const { user, resolviendo } = useSesionRequerida();
   const saldo = useBalanceStore((s) => s.saldo);
@@ -303,10 +308,15 @@ export default function CajeroPage() {
             ) : (
               <button 
                 onClick={startVerification}
-                className="w-full bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-black py-4 rounded-xl transition-all shadow-[0_5px_20px_rgba(212,175,55,0.2)] tracking-widest uppercase text-sm flex items-center justify-center gap-3"
+                disabled={avisoPendiente}
+                title={avisoPendiente ? TEXTO_AVISO : undefined}
+                className="disabled:opacity-40 disabled:cursor-not-allowed w-full bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-black py-4 rounded-xl transition-all shadow-[0_5px_20px_rgba(212,175,55,0.2)] tracking-widest uppercase text-sm flex items-center justify-center gap-3"
               >
                 <Camera size={18} /> {cameraStatus === "error" ? "Reintentar Verificación" : "Activar Cámara"}
               </button>
+            )}
+            {avisoPendiente && (
+              <p className="mt-3 text-[11px] leading-relaxed text-amber-300">{TEXTO_AVISO}</p>
             )}
           </div>
         ) : (
