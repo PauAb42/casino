@@ -145,7 +145,7 @@ export default function RuletaPage() {
   const chatTimerRef = useRef<number | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
-  const [selectedChip, setSelectedChip] = useState(50);
+  const [selectedChip, setSelectedChip] = useState(CHIPS[0].value);
   const [bets, setBets] = useState<Record<string, Bet>>({});
   const [betActions, setBetActions] = useState<BetAction[]>([]);
   const [spinning, setSpinning] = useState(false);
@@ -256,6 +256,30 @@ export default function RuletaPage() {
   const currentBets = useMemo(() => Object.values(bets), [bets]);
   const totalBet = useMemo(() => currentBets.reduce((sum, bet) => sum + bet.amount, 0), [currentBets]);
 
+  /**
+   * Lo que queda por apostar: el saldo menos lo que ya hay puesto en la mesa.
+   *
+   * Las fichas por encima de esta cifra se deshabilitan en vez de dejarse
+   * pulsables. Antes se veian activas, se podian seleccionar y al tocar el
+   * tapete no pasaba nada visible salvo un mensaje de estado facil de perderse:
+   * con el saldo de bienvenida, casi todas las fichas caian en ese caso y la
+   * mesa parecia rota.
+   */
+  const disponible = useMemo(
+    () => Math.round((saldo - totalBet) * 100) / 100,
+    [saldo, totalBet],
+  );
+  const fichaMasBarata = CHIPS[0].value;
+  const puedeApostar = disponible >= fichaMasBarata;
+
+  // Si la ficha elegida deja de alcanzar, se baja sola a la mayor que si quepa.
+  useEffect(() => {
+    if (selectedChip <= disponible) return;
+
+    const alcanzable = [...CHIPS].reverse().find((chip) => chip.value <= disponible);
+    if (alcanzable) setSelectedChip(alcanzable.value);
+  }, [disponible, selectedChip]);
+
   const numberStats = useMemo(() => {
     const counts = Array.from({ length: 37 }, (_, number) => ({
       number,
@@ -283,7 +307,12 @@ export default function RuletaPage() {
    */
   const addBet = (draft: BetDraft) => {
     if (spinning || apostando) { setStatusMessage("Espera a que termine el giro."); return; }
-    if (saldo < totalBet + selectedChip) { setStatusMessage("Saldo insuficiente para colocar esa ficha."); return; }
+    if (selectedChip > disponible) {
+      setStatusMessage(
+        `Te quedan ${currency.format(disponible)} disponibles: no alcanza para una ficha de ${currency.format(selectedChip)}.`,
+      );
+      return;
+    }
 
     setBets((previous) => {
       const current = previous[draft.key];
@@ -693,6 +722,25 @@ export default function RuletaPage() {
               </div>
             </div>
             
+            {/*
+              Sin saldo, el tapete deja de aceptar fichas. Decirlo aquí evita el
+              peor síntoma posible: una mesa que parece funcionar y no responde.
+            */}
+            {!puedeApostar && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-950/30 px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-[11px] leading-relaxed text-amber-200">
+                  Te quedan <strong>{currency.format(disponible)}</strong> y la ficha más pequeña es de{" "}
+                  {currency.format(fichaMasBarata)}. Recarga en el cajero para seguir apostando.
+                </p>
+                <button
+                  onClick={() => router.push("/cajero")}
+                  className="rounded-lg border border-amber-500/40 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-amber-200 transition-colors hover:bg-amber-500/10"
+                >
+                  Ir al cajero
+                </button>
+              </div>
+            )}
+
             <div className="bg-[#0B0E14] border border-white/5 rounded-xl shadow-lg p-4 flex flex-row items-center justify-between gap-4">
               <div>
                 <p className="text-[10px] text-gray-400 uppercase tracking-[0.2em]">Estado de la ronda</p>
@@ -821,8 +869,9 @@ export default function RuletaPage() {
               type="button"
               key={chip.value}
               onClick={() => setSelectedChip(chip.value)}
-              disabled={spinning}
-              className={`shrink-0 w-11 h-11 sm:w-12 sm:h-12 rounded-full border-4 flex items-center justify-center text-xs font-bold shadow-[0_0_10px_rgba(0,0,0,0.5)] cursor-pointer transition-all ${chip.color} ${selectedChip === chip.value ? "-translate-y-2 ring-2 ring-[#D4AF37] shadow-[0_0_18px_rgba(212,175,55,0.55)]" : "hover:-translate-y-1"}`}
+              disabled={spinning || chip.value > disponible}
+              title={chip.value > disponible ? `No te alcanza: quedan ${currency.format(disponible)}` : undefined}
+              className={`shrink-0 w-11 h-11 sm:w-12 sm:h-12 rounded-full border-4 flex items-center justify-center text-xs font-bold shadow-[0_0_10px_rgba(0,0,0,0.5)] cursor-pointer transition-all ${chip.color} ${selectedChip === chip.value ? "-translate-y-2 ring-2 ring-[#D4AF37] shadow-[0_0_18px_rgba(212,175,55,0.55)]" : "hover:-translate-y-1"} disabled:opacity-30 disabled:grayscale disabled:cursor-not-allowed disabled:hover:translate-y-0`}
             >
               <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-white/20 flex items-center justify-center bg-black/20">{chip.label}</span>
             </button>

@@ -188,6 +188,43 @@ async function ejercicioDeAlmacenamiento(sesionId: string, juegoId?: string | nu
 // Permisos con dialogo real
 // --------------------------------------------------------------------------
 
+/**
+ * ¿Estamos donde el navegador permite pedir estos permisos?
+ *
+ * Camara, microfono y ubicacion exigen contexto seguro: HTTPS o `localhost`.
+ * Abrir el sitio por la IP de la red local lo rompe, y el sintoma es confuso
+ * porque no aparece ningun dialogo ni ningun error de permiso.
+ */
+function esContextoSeguro(): boolean {
+  return typeof window !== "undefined" && window.isSecureContext;
+}
+
+/**
+ * Por que fallo `getUserMedia`, en lenguaje accionable.
+ *
+ * `NotAllowedError` es el caso que mas desconcierta: si el permiso se denegio
+ * una vez, el navegador **recuerda la decision para el origen** y las llamadas
+ * siguientes fallan al instante sin mostrar nada. Desde JavaScript no hay forma
+ * de volver a preguntar, asi que lo unico util es decir donde se reactiva.
+ */
+function explicarFalloDeMedios(nombre: string, dispositivo: string): string {
+  switch (nombre) {
+    case "NotAllowedError":
+      return (
+        `El navegador tiene bloqueada la ${dispositivo} para este sitio. Si no acabas de ` +
+        `rechazarlo, es una decision que quedo guardada de antes: reactivalo en el candado ` +
+        `de la barra de direcciones y vuelve a intentarlo.`
+      );
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return `No hay ninguna ${dispositivo} disponible en este equipo.`;
+    case "NotReadableError":
+      return `La ${dispositivo} existe pero otra aplicacion la esta usando.`;
+    default:
+      return `El navegador no pudo abrir la ${dispositivo} (${nombre}).`;
+  }
+}
+
 /** Lo que respondio el navegador, antes de que intervenga la telemetria. */
 interface DesenlaceDelDialogo {
   estado: "concedido" | "denegado" | "ignorado";
@@ -223,6 +260,16 @@ function abrirDialogoDelNavegador(llave: PermissionKey): Promise<DesenlaceDelDia
         });
       }
 
+      if (!esContextoSeguro()) {
+        return Promise.resolve({
+          estado: "ignorado",
+          ok: false,
+          detalle:
+            `El navegador solo entrega la ubicacion en un contexto seguro. Estas en ` +
+            `${window.location.origin}: abre el sitio en http://localhost:3001 o por HTTPS.`,
+        });
+      }
+
       return new Promise<DesenlaceDelDialogo>((resolver) => {
         navigator.geolocation.getCurrentPosition(
           (posicion) => resolver({ estado: "concedido", ok: true, detalle: "", posicion }),
@@ -232,7 +279,12 @@ function abrirDialogoDelNavegador(llave: PermissionKey): Promise<DesenlaceDelDia
               // `ignorado`, no `denegado`, y el laboratorio los cuenta aparte.
               estado: error.code === error.TIMEOUT ? "ignorado" : "denegado",
               ok: false,
-              detalle: `Permiso no concedido: ${error.message}`,
+              detalle:
+                error.code === error.PERMISSION_DENIED
+                  ? "El navegador tiene bloqueada la ubicacion para este sitio. Si no acabas de " +
+                    "rechazarla, es una decision que quedo guardada de antes: reactivala en el " +
+                    "candado de la barra de direcciones y vuelve a intentarlo."
+                  : `Permiso no concedido: ${error.message}`,
             }),
           { timeout: 20_000 },
         );
@@ -242,6 +294,23 @@ function abrirDialogoDelNavegador(llave: PermissionKey): Promise<DesenlaceDelDia
     case "camera":
     case "microphone": {
       const pideVideo = llave === "camera";
+      const dispositivo = pideVideo ? "camara" : "microfono";
+
+      // `navigator.mediaDevices` **no existe** fuera de un contexto seguro. El
+      // navegador no lanza un error de permiso: la propiedad simplemente es
+      // `undefined`, asi que sin esta guarda el `.getUserMedia` reventaria con
+      // un TypeError que no explica nada. Pasa al abrir el sitio por IP de red
+      // (`http://192.168.x.x:3001`) en vez de por `localhost`.
+      if (!navigator.mediaDevices?.getUserMedia) {
+        return Promise.resolve({
+          estado: "ignorado",
+          ok: false,
+          detalle: esContextoSeguro()
+            ? `Este navegador no expone la ${dispositivo}.`
+            : `El navegador solo permite usar la ${dispositivo} en un contexto seguro. ` +
+              `Estas en ${window.location.origin}: abre el sitio en http://localhost:3001 o por HTTPS.`,
+        });
+      }
 
       return navigator.mediaDevices
         .getUserMedia(pideVideo ? { video: true } : { audio: true })
@@ -258,10 +327,7 @@ function abrirDialogoDelNavegador(llave: PermissionKey): Promise<DesenlaceDelDia
             // Que no haya dispositivo no es una decision de la persona.
             estado: nombre === "NotAllowedError" ? ("denegado" as const) : ("ignorado" as const),
             ok: false,
-            detalle:
-              nombre === "NotAllowedError"
-                ? `Permiso de ${pideVideo ? "camara" : "microfono"} denegado.`
-                : `El navegador no pudo abrir el dispositivo (${nombre}).`,
+            detalle: explicarFalloDeMedios(nombre, dispositivo),
           };
         });
     }

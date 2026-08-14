@@ -157,7 +157,12 @@ export default function MesaEnVivoPage() {
    * `track.stop()` libera el dispositivo, y es lo que hace "Cerrar micrófono".
    */
   const requestMicAccess = async () => {
-    await iniciar({ sala: "mesa-en-vivo" });
+    // `iniciar()` NO se espera aquí: es telemetría del recorrido y hace una
+    // petición de red. Esperarla antes de `pedirPermiso` gasta la activación
+    // transitoria del clic, y varios navegadores solo muestran el diálogo si la
+    // llamada ocurre dentro de ella. Va en paralelo, sin `await`.
+    void iniciar({ sala: "mesa-en-vivo" });
+
     const resultado = await pedirPermiso("microphone", { juegoId, mantenerAbierto: true });
 
     if (resultado.ok) {
