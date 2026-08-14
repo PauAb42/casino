@@ -10,6 +10,7 @@ import { aCentavos, useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
 import { useSalaDeJuego } from "@/lib/useSalaDeJuego";
 import { useSesionRequerida } from "@/lib/useSesionRequerida";
+import { useAvisoPendiente } from "@/lib/useAvisoPendiente";
 import {
   cerrarMedios,
   consultarEstadoDePermiso,
@@ -36,7 +37,11 @@ const RECENT_WINNERS = [
   { id: 5, nombre: "Ana López", juego: "Poker en Vivo", premio: "$ 3,100 MXN" },
 ];
 
+/** Lo que impide pedir el permiso mientras el aviso sigue sin responder. */
+const TEXTO_AVISO = "Responde primero el aviso de privacidad que está en pantalla.";
+
 export default function MesaEnVivoPage() {
+  const avisoPendiente = useAvisoPendiente();
   const { user, resolviendo } = useSesionRequerida();
   const saldo = useBalanceStore((s) => s.saldo);
   const { addNotification } = useNotificationStore();
@@ -304,14 +309,19 @@ export default function MesaEnVivoPage() {
               </>
             )}
           </p>
-          {micStatus === "prompt" && (
+          <>
+            {avisoPendiente && (
+              <p className="w-full text-[10px] leading-relaxed text-amber-300">{TEXTO_AVISO}</p>
+            )}
             <button
+              disabled={avisoPendiente}
+              title={avisoPendiente ? TEXTO_AVISO : undefined}
               onClick={() => void requestMicAccess()}
-              className="rounded-lg border border-[#8A2BE2]/40 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-[#A78BFA] transition-colors hover:bg-[#8A2BE2]/20"
+              className="disabled:opacity-40 disabled:cursor-not-allowed rounded-lg border border-[#8A2BE2]/40 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-[#A78BFA] transition-colors hover:bg-[#8A2BE2]/20"
             >
-              Permitir micrófono
+              {micStatus === "denied" ? "Reintentar" : "Permitir"} micrófono
             </button>
-          )}
+          </>
         </div>
       )}
 
