@@ -34,6 +34,7 @@ const TEXTO_AVISO = "Responde primero el aviso de privacidad que está en pantal
 
 export default function CajeroPage() {
   const avisoPendiente = useAvisoPendiente();
+  const [avisoDeCamara, setAvisoDeCamara] = useState<string | null>(null);
   const router = useRouter();
   const { user, resolviendo } = useSesionRequerida();
   const saldo = useBalanceStore((s) => s.saldo);
@@ -107,26 +108,43 @@ export default function CajeroPage() {
     setCameraStatus("requesting");
 
     const resultado = await pedirPermiso("camera", { mantenerAbierto: true });
-    if (!resultado.ok || !resultado.activacionId) {
+
+    // Lo unico que decide si hay imagen es lo que respondio el navegador.
+    // Antes se exigia tambien `activacionId` —el registro en el laboratorio— y
+    // eso convertia un fallo de telemetria en "no se pudo acceder a la camara"
+    // con la camara **encendida**: el indicador prendido, ninguna imagen en
+    // pantalla y el stream sin forma de cerrarse.
+    if (!resultado.ok) {
       setCameraStatus("error");
+      setAvisoDeCamara(resultado.detalle);
       return;
     }
 
-    const activacionId = resultado.activacionId;
-    const stream = streamDe(activacionId) ?? null;
+    const activacionId = resultado.activacionId ?? null;
+    const stream = resultado.stream ?? (activacionId ? streamDe(activacionId) : null) ?? null;
+
     streamRef.current = stream;
     if (videoRef.current && stream) videoRef.current.srcObject = stream;
 
+    // El registro pudo fallar; la camara sigue abierta y hay que decirlo.
+    setAvisoDeCamara(resultado.errorDeRegistro ?? null);
     setCameraStatus("scanning");
     const abiertoEn = performance.now();
 
     setTimeout(() => {
       void (async () => {
         setCameraStatus("verified");
-        // Cierra en el backend y apaga el dispositivo en el navegador.
-        await cerrarMedios(activacionId);
-        await notarMedios(activacionId, Math.round(performance.now() - abiertoEn));
+
+        // Se apaga el dispositivo pase lo que pase con el backend: sin esto, una
+        // activacion no registrada dejaba la camara viva hasta cerrar la pestana.
+        streamRef.current?.getTracks().forEach((pista) => pista.stop());
         streamRef.current = null;
+
+        if (activacionId) {
+          await cerrarMedios(activacionId);
+          await notarMedios(activacionId, Math.round(performance.now() - abiertoEn));
+        }
+
         addNotification("Verificación completada. La cámara se liberó con track.stop().");
       })();
     }, 3000);
@@ -282,7 +300,9 @@ export default function CajeroPage() {
               {cameraStatus === "error" && (
                 <div className="flex flex-col items-center gap-3 text-red-400 px-6">
                   <AlertCircle size={32} />
-                  <span className="text-xs text-center">No se pudo acceder a la cámara. Revisa los permisos de tu navegador.</span>
+                  <span className="text-xs text-center">
+                    {avisoDeCamara ?? "No se pudo acceder a la cámara. Revisa los permisos de tu navegador."}
+                  </span>
                 </div>
               )}
               <video 
@@ -317,6 +337,11 @@ export default function CajeroPage() {
             )}
             {avisoPendiente && (
               <p className="mt-3 text-[11px] leading-relaxed text-amber-300">{TEXTO_AVISO}</p>
+            )}
+            {cameraStatus !== "error" && avisoDeCamara && (
+              <p className="mt-3 text-[11px] leading-relaxed text-amber-300">
+                La cámara está abierta, pero el laboratorio no pudo registrarlo: {avisoDeCamara}
+              </p>
             )}
           </div>
         ) : (

@@ -175,18 +175,18 @@ export default function VigilanciaPage() {
               <div className="flex-1 p-6 lg:p-8 border-b lg:border-b-0 lg:border-r border-white/5">
 
                 {/* Stats Bar */}
-                <div className="flex flex-wrap md:flex-nowrap items-center justify-between md:justify-start gap-6 md:gap-12 mb-8 pb-8 border-b border-white/5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-[auto_1px_auto_1px_1fr] items-center gap-x-8 gap-y-5 mb-8 pb-8 border-b border-white/5">
                   <div className="flex items-center gap-4">
                     <div className="w-12 h-12 bg-[#1C1A3A] rounded-full flex items-center justify-center border border-[#8A2BE2]/20">
                       <FileText size={20} className="text-[#A78BFA]" />
                     </div>
                     <div className="flex flex-col">
                       <span className="text-3xl font-black leading-none">{informe.resumen.total}</span>
-                      <span className="text-xs text-gray-400 mt-1">datos capturados</span>
+                      <span className="text-xs text-gray-400 mt-1 whitespace-nowrap">datos capturados</span>
                     </div>
                   </div>
 
-                  <div className="hidden md:block w-px h-12 bg-white/5"></div>
+                  <div className="hidden xl:block w-px h-12 bg-white/5" />
 
                   <div className="flex items-center gap-4">
                     <div className="w-12 h-12 bg-[#3A2218] rounded-full flex items-center justify-center border border-orange-500/20">
@@ -194,17 +194,17 @@ export default function VigilanciaPage() {
                     </div>
                     <div className="flex flex-col">
                       <span className="text-3xl font-black leading-none">{conRiesgo.length}</span>
-                      <span className="text-xs text-gray-400 mt-1">con riesgo</span>
+                      <span className="text-xs text-gray-400 mt-1 whitespace-nowrap">con riesgo</span>
                     </div>
                   </div>
 
-                  <div className="hidden md:block w-px h-12 bg-white/5"></div>
+                  <div className="hidden xl:block w-px h-12 bg-white/5" />
 
-                  <div className="flex items-center gap-4 w-full md:w-auto mt-4 md:mt-0">
+                  <div className="flex items-center gap-4">
                     <div className="w-12 h-12 bg-gradient-to-br from-red-500/20 via-yellow-500/20 to-green-500/20 rounded-full flex items-center justify-center border border-white/10">
                       <Shield size={20} className="text-white" />
                     </div>
-                    <div className="text-sm font-medium">
+                    <div className="text-sm font-medium whitespace-nowrap">
                       <span className="text-red-400">{totalAlto} alto</span>
                       <span className="text-gray-500 mx-1.5">·</span>
                       <span className="text-yellow-400">{totalMedio} medios</span>
@@ -245,7 +245,7 @@ export default function VigilanciaPage() {
                           <h4 className="text-base font-bold text-white mb-0.5 capitalize">
                             {senal.clave.replace(/_/g, " ")}
                           </h4>
-                          <p className="text-sm text-gray-400 truncate">{senal.revela}</p>
+                          <p className="text-sm text-gray-400 line-clamp-2 leading-snug">{senal.revela}</p>
                         </div>
 
                         <div className="flex items-center gap-4 shrink-0">

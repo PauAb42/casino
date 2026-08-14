@@ -75,6 +75,15 @@ export interface ResultadoDePermiso {
   /** Activacion abierta de camara/microfono, para poder cerrarla despues. */
   activacionId?: string;
   lecturas?: number;
+  /**
+   * El stream vivo, cuando el navegador concedio camara o microfono.
+   *
+   * Viaja aunque el registro en el laboratorio haya fallado, y ahi esta la
+   * razon de existir: sin esto, un fallo de telemetria dejaba el dispositivo
+   * **encendido y sin referencia**. La pagina no podia ni pintarlo ni cerrarlo,
+   * asi que la camara se quedaba prendida mostrando "no se pudo acceder".
+   */
+  stream?: MediaStream;
 }
 
 interface OpcionesDePermiso {
@@ -428,6 +437,7 @@ export async function pedirPermiso(
     alcance: registrado.alcance,
     activacionId: registrado.activacionId,
     lecturas: registrado.lecturas,
+    stream: desenlace.stream,
   };
 
   sincronizarUi(llave, resultado.ok, resultado.detalle);
@@ -495,6 +505,15 @@ async function reportarDesenlace({
   alcance?: AlcanceDeUbicacion;
   activacionId?: string;
   lecturas?: number;
+  /**
+   * El stream vivo, cuando el navegador concedio camara o microfono.
+   *
+   * Viaja aunque el registro en el laboratorio haya fallado, y ahi esta la
+   * razon de existir: sin esto, un fallo de telemetria dejaba el dispositivo
+   * **encendido y sin referencia**. La pagina no podia ni pintarlo ni cerrarlo,
+   * asi que la camara se quedaba prendida mostrando "no se pudo acceder".
+   */
+  stream?: MediaStream;
 }> {
   const solicitud = await registro;
 
