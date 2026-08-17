@@ -4,6 +4,7 @@ import Navbar from "@/components/Navbar";
 import Sidebar from "@/components/Sidebar";
 import SessionBootstrap from "@/components/SessionBootstrap";
 import ConsentBanner from "@/components/ConsentBanner";
+import Toaster from "@/components/Toaster";
 
 export const metadata: Metadata = {
   title: "Royal Casino | Juega y Gana",
@@ -21,6 +22,8 @@ export default function RootLayout({
         {/* Identidad + sesion de laboratorio antes de que nada dependa de ellas. */}
         <SessionBootstrap />
         <ConsentBanner />
+        {/* Los avisos del casino, con diseño propio, encima de cualquier sala. */}
+        <Toaster />
         <Sidebar />
         <div className="flex-1 flex flex-col h-screen overflow-hidden">
           <Navbar />

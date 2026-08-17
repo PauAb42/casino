@@ -53,9 +53,19 @@ export default function Home() {
   const games = juegos.filter((juego) => juego.slug in SALAS);
   const isLoading = cargandoCatalogo && juegos.length === 0;
 
+  /**
+   * "Juegos disponibles" son las salas a las que se puede entrar, y nada más.
+   *
+   * `GET /juegos` devuelve ocho filas: las cinco salas del recorrido y tres
+   * juegos de laboratorio (`ruleta-permisos`, `tragamonedas-cookies`,
+   * `poker-huella`) que no tienen ruta ni pantalla. Contarlos todos anunciaba
+   * ocho mesas y pintaba cinco justo debajo, en esta misma página.
+   */
+  const salasJugables = games.length;
+
   const STATS_CARDS = [
     { id: 1, label: "USUARIOS ACTIVOS", value: SIMULATED_STATS.usuariosActivos, trend: "Escenografía", icon: Users, color: "text-[#8A2BE2]" },
-    { id: 2, label: "JUEGOS DISPONIBLES", value: juegos.length.toLocaleString(), trend: "Catálogo del backend", icon: Dice5, color: "text-red-500" },
+    { id: 2, label: "JUEGOS DISPONIBLES", value: salasJugables.toLocaleString(), trend: "Salas abiertas", icon: Dice5, color: "text-red-500" },
     { id: 3, label: "PAGOS HOY", value: SIMULATED_FINANCES.pagosHoy, trend: "Escenografía", icon: Wallet, color: "text-blue-500" },
     { id: 4, label: "GANANCIAS HOY", value: SIMULATED_FINANCES.gananciasHoy, trend: "Escenografía", icon: TrendingUp, color: "text-cyan-400" },
     { id: 5, label: "SESIONES ACTIVAS", value: SIMULATED_STATS.sesionesActivas, trend: "Escenografía", icon: Activity, color: "text-[#8A2BE2]" },
@@ -81,8 +91,12 @@ export default function Home() {
             <p className="text-gray-200 mb-8 text-xl font-medium tracking-wide drop-shadow-md">
               + 200 GIROS GRATIS
             </p>
-            <button 
-              onClick={() => handleProtectedAction("/cajero")}
+            {/* El bono se reclama en /promociones, que es donde vive el catálogo
+                real y el botón que llama a POST /promociones/:id/reclamo. Antes
+                esto llevaba al cajero: la persona aterrizaba en un formulario de
+                depósito sin ningún bono a la vista. */}
+            <button
+              onClick={() => handleProtectedAction("/promociones")}
               className="bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-bold py-3.5 px-10 rounded-xl transition-all shadow-[0_4px_15px_rgba(212,175,55,0.2)] hover:shadow-[0_6px_20px_rgba(212,175,55,0.3)]"
             >
               RECLAMAR BONO

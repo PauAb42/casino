@@ -54,7 +54,7 @@ export default function TorneosPage() {
   const router = useRouter();
   const { user, resolviendo } = useSesionRequerida();
   const rol = useAuthStore((s) => s.cuenta?.rol);
-  const { addNotification } = useNotificationStore();
+  const notificar = useNotificationStore((s) => s.notificar);
 
   const [torneos, setTorneos] = useState<Torneo[]>([]);
   const [detalle, setDetalle] = useState<DetalleDeTorneo | null>(null);
@@ -69,8 +69,18 @@ export default function TorneosPage() {
       const { torneos: filas } = await api.torneos.listar();
       setTorneos(filas);
       setError(null);
-      // Se abre el primero por defecto: una lista sin clasificación no dice nada.
-      if (filas.length > 0) setSeleccionado((actual) => actual ?? filas[0].id);
+
+      // Se abre el primero por defecto: una lista sin clasificación no dice
+      // nada. Si se llegó desde la promoción del torneo (`?torneo=CODIGO`), se
+      // abre ese: aterrizar en otra clasificación es llegar a medias. Se lee de
+      // `window.location` y no con `useSearchParams` para no obligar a envolver
+      // la página entera en un <Suspense> por un parámetro opcional.
+      const codigoPedido = new URLSearchParams(window.location.search).get("torneo");
+      const pedido = codigoPedido
+        ? filas.find((torneo) => torneo.codigo === codigoPedido)
+        : undefined;
+
+      if (filas.length > 0) setSeleccionado((actual) => actual ?? (pedido ?? filas[0]).id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "No se pudieron cargar los torneos");
     } finally {
@@ -102,10 +112,16 @@ export default function TorneosPage() {
 
     try {
       await api.torneos.inscribirse(id);
-      addNotification("Estás inscrito. A partir de ahora, cada apuesta suma puntos.");
+      notificar({
+        titulo: "Inscripción confirmada",
+        mensaje: "Estás inscrito. A partir de ahora, cada apuesta suma puntos.",
+        tipo: "exito",
+      });
       await Promise.all([cargarTorneos(), cargarDetalle(id)]);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "No se pudo completar la inscripción");
+      const detalle = err instanceof ApiError ? err.message : "No se pudo completar la inscripción";
+      setError(detalle);
+      notificar({ titulo: "Inscripción", mensaje: detalle, tipo: "error" });
     } finally {
       setInscribiendo(false);
     }

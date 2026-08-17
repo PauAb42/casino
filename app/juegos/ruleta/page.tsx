@@ -121,7 +121,7 @@ export default function RuletaPage() {
   const router = useRouter();
   const { user, resolviendo } = useSesionRequerida();
   const saldo = useBalanceStore((s) => s.saldo);
-  const { addNotification } = useNotificationStore(); // <-- Notificaciones globales
+  const notificar = useNotificationStore((s) => s.notificar); // avisos flotantes + campana
 
   /**
    * El permiso de notificaciones **no** bloquea la mesa.
@@ -212,6 +212,16 @@ export default function RuletaPage() {
     // El fallo de telemetría se informa, pero no cambia lo que decidió la
     // persona ni cierra la mesa.
     setAvisoDePermiso(resultado.errorDeRegistro ?? null);
+
+    // El desenlace se dice siempre con el aviso del casino: si la persona negó
+    // el permiso, la notificación nativa de abajo no puede contarle nada.
+    notificar({
+      titulo: resultado.ok ? "Notificaciones activadas" : "Notificaciones bloqueadas",
+      mensaje: resultado.ok
+        ? "La mesa ya puede avisarte fuera de esta pestaña. El permiso sigue activo hasta que tú lo revoques."
+        : "Seguirás viendo los resultados aquí dentro; la mesa no te avisará fuera de la pestaña.",
+      tipo: resultado.ok ? "exito" : "info",
+    });
 
     if (resultado.ok && "Notification" in window && Notification.permission === "granted") {
       new Notification("Mesa lista", {
@@ -446,8 +456,22 @@ export default function RuletaPage() {
 
       if (totalReturn > 0) {
         setStatusMessage(`Salió el ${result}. Premio: ${currency.format(totalReturn)}. Resultado neto: ${netResult >= 0 ? "+" : ""}${currency.format(netResult)}.`);
-        addNotification(`¡Felicidades! Ganaste ${currency.format(totalReturn)} en la Ruleta (Salió el ${result}).`);
+        notificar({
+          titulo: "¡Premio en la Ruleta!",
+          mensaje: `Salió el ${result}. Ganaste ${currency.format(totalReturn)}.`,
+          tipo: "exito",
+        });
 
+        /*
+          El globo del sistema operativo se queda **solo aquí**, y a propósito.
+
+          En el resto del sitio los avisos son los del casino (<Toaster />): una
+          notificación nativa no se puede diseñar, y encima solo la ve quien
+          concedió el permiso. Pero esta es la sala de la Notification API, y su
+          lección es justo esa: el permiso que aceptaste hace unos giros sigue
+          vivo, y el sitio te alcanza fuera de la pestaña sin volver a preguntar.
+          Quitarlo dejaría el ejercicio sin la parte que se demuestra.
+        */
         if ("Notification" in window && Notification.permission === "granted") {
           new Notification("¡Premio en Ruleta!", {
             body: `¡Felicidades! Has ganado ${currency.format(totalReturn)} en la Ruleta.`,

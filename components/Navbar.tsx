@@ -9,7 +9,15 @@ import {
   Settings, CheckCheck, Trash2, ScrollText
 } from "lucide-react";
 import { useAuthStore } from "@/lib/authStore";
-import { useNotificationStore } from "@/lib/notificationStore";
+import { useNotificationStore, type TipoDeNotificacion } from "@/lib/notificationStore";
+
+/** El punto de color de cada aviso en la campana, igual que en <Toaster />. */
+const COLOR_DE_NOTIFICACION: Record<TipoDeNotificacion, string> = {
+  exito: "bg-emerald-400",
+  error: "bg-red-400",
+  aviso: "bg-[#D4AF37]",
+  info: "bg-[#8A2BE2]",
+};
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -193,12 +201,20 @@ export default function Navbar() {
                         <p className="p-6 text-center text-xs text-gray-500">No tienes notificaciones nuevas.</p>
                       ) : (
                         notifications.map(notif => (
-                          <div 
-                            key={notif.id} 
+                          <div
+                            key={notif.id}
                             onClick={() => markAsRead(notif.id)}
                             className={`p-4 border-b border-white/5 cursor-pointer transition-colors hover:bg-white/5 ${!notif.read ? 'bg-[#1E1133]/30' : ''}`}
                           >
-                            <p className={`text-xs ${!notif.read ? 'text-white font-bold' : 'text-gray-400'}`}>
+                            {/* El mismo código de color que el aviso flotante:
+                                la campana es su historial, no otra cosa. */}
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${COLOR_DE_NOTIFICACION[notif.tipo]}`} />
+                              <span className="text-[9px] font-bold uppercase tracking-widest text-gray-500 truncate">
+                                {notif.titulo ?? "Royal Casino"}
+                              </span>
+                            </div>
+                            <p className={`text-xs leading-relaxed ${!notif.read ? 'text-white font-bold' : 'text-gray-400'}`}>
                               {notif.message}
                             </p>
                             <span className="text-[9px] text-gray-600 mt-2 block">

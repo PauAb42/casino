@@ -66,7 +66,7 @@ export default function TragamonedasPage() {
   const router = useRouter();
   const { user, resolviendo } = useSesionRequerida();
   const saldo = useBalanceStore((s) => s.saldo);
-  const { addNotification } = useNotificationStore(); // <-- Hook de notificaciones
+  const notificar = useNotificationStore((s) => s.notificar); // avisos flotantes + campana
 
   const [lines, setLines] = useState(25);
   const [betPerLine, setBetPerLine] = useState(4);
@@ -250,14 +250,16 @@ export default function TragamonedasPage() {
           apuesta: totalBet,
         });
 
-        addNotification(`¡Felicidades! Ganaste ${currency.format(winAmount)} en las Tragamonedas.`);
-
-        if ("Notification" in window && Notification.permission === "granted") {
-          new Notification("¡Premio en Tragamonedas!", {
-            body: `¡Felicidades! Has ganado ${currency.format(winAmount)} en Royal Slots.`,
-            icon: "/tragamonedas.png",
-          });
-        }
+        // El aviso es del casino, no del sistema operativo: el `new Notification()`
+        // que había aquí dependía de un permiso concedido en otra sala, así que
+        // el premio se anunciaba a unos jugadores y a otros no.
+        notificar({
+          titulo: "¡Premio en Tragamonedas!",
+          mensaje: `¡Felicidades! Ganaste ${currency.format(winAmount)} en Royal Slots${
+            cuantas ? ` con ${cuantas} línea${cuantas > 1 ? "s" : ""} premiada${cuantas > 1 ? "s" : ""}` : ""
+          }.`,
+          tipo: "exito",
+        });
       } else {
         setStatusMessage("¡BUENA SUERTE!");
       }

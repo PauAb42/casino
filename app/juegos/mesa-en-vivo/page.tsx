@@ -44,7 +44,7 @@ export default function MesaEnVivoPage() {
   const avisoPendiente = useAvisoPendiente();
   const { user, resolviendo } = useSesionRequerida();
   const saldo = useBalanceStore((s) => s.saldo);
-  const { addNotification } = useNotificationStore();
+  const notificar = useNotificationStore((s) => s.notificar);
 
   // Permiso de Micrófono
   const [micStatus, setMicStatus] = useState<"prompt" | "granted" | "denied">("prompt");
@@ -146,11 +146,13 @@ export default function MesaEnVivoPage() {
 
   const toggleFavorite = () => {
     setIsFavorite(!isFavorite);
-    if (!isFavorite) {
-      addNotification("Mesa agregada a tus favoritos.");
-    } else {
-      addNotification("Mesa eliminada de tus favoritos.");
-    }
+    // Un favorito es un gesto trivial: se avisa en pantalla y no se guarda en la
+    // campana, que es el historial de lo que importa.
+    notificar({
+      mensaje: isFavorite ? "Mesa eliminada de tus favoritos." : "Mesa agregada a tus favoritos.",
+      tipo: "info",
+      enBandeja: false,
+    });
   };
 
   /**
@@ -175,10 +177,14 @@ export default function MesaEnVivoPage() {
       setActivacionId(resultado.activacionId ?? null);
       activacionRef.current = resultado.activacionId ?? null;
       abiertoDesde.current = performance.now();
-      addNotification("Acceso al micrófono concedido: el indicador de tu navegador ya está encendido.");
+      notificar({
+        titulo: "Micrófono abierto",
+        mensaje: "Acceso al micrófono concedido: el indicador de tu navegador ya está encendido.",
+        tipo: "aviso",
+      });
     } else {
       setMicStatus("denied");
-      addNotification(resultado.detalle);
+      notificar({ titulo: "Micrófono", mensaje: resultado.detalle, tipo: "error" });
     }
   };
 
@@ -199,10 +205,14 @@ export default function MesaEnVivoPage() {
 
     // El dispositivo ya está liberado pase lo que pase; lo que puede fallar es
     // dejarlo anotado, y eso se dice en vez de tragárselo.
-    if (!registrado && error) addNotification(error);
+    if (!registrado && error) notificar({ titulo: "Micrófono", mensaje: error, tipo: "error" });
     setSilenciado(false);
     setMicStatus("prompt");
-    addNotification("Micrófono liberado con track.stop(). Ahora sí se apagó el indicador.");
+    notificar({
+      titulo: "Micrófono liberado",
+      mensaje: "Micrófono liberado con track.stop(). Ahora sí se apagó el indicador.",
+      tipo: "exito",
+    });
   };
 
   /** "Lo noté": cuánto tardaste en ver que el micrófono estaba abierto. */
@@ -223,8 +233,15 @@ export default function MesaEnVivoPage() {
    * que se acreditaba a sí mismo el doble de la apuesta.
    */
   const handlePlaceBet = async () => {
+    // `alert()` bloqueaba la mesa —vídeo, chat y crupier incluidos— hasta que
+    // alguien pulsara "Aceptar" en un diálogo del navegador. El aviso flotante
+    // informa igual, con el diseño de la sala y sin detenerla.
     if (saldo < selectedChip) {
-      alert("Saldo insuficiente para realizar esta apuesta en vivo.");
+      notificar({
+        titulo: "Saldo insuficiente",
+        mensaje: `Esa ficha vale ${formatMoney(selectedChip)} y tu saldo es de ${formatMoney(saldo)}. Elige una ficha menor o recarga en el cajero.`,
+        tipo: "aviso",
+      });
       return;
     }
 
@@ -251,7 +268,11 @@ export default function MesaEnVivoPage() {
           `¡Felicidades! Ganaste ${formatMoney(ronda.premio_mxn)} ` +
             `(${desenlace?.mano_jugador} contra ${desenlace?.mano_banca})`,
         );
-        addNotification(`¡Mesa en Vivo: Ganaste ${formatMoney(ronda.premio_mxn)}!`);
+        notificar({
+          titulo: "¡Ganaste en Mesa en Vivo!",
+          mensaje: `El crupier pagó ${formatMoney(ronda.premio_mxn)} a tu mano.`,
+          tipo: "exito",
+        });
         void registrarProgreso(Math.round(ronda.premio_centavos / 100), {
           apuesta: selectedChip,
           resultado: desenlace?.resultado ?? "gano",
@@ -612,7 +633,7 @@ export default function MesaEnVivoPage() {
                 </div>
                 <div className="flex items-center justify-between pt-3 border-t border-white/5">
                   <span className="text-[10px] text-gray-500 flex items-center gap-1"><Users size={12}/> {table.jugadores}</span>
-                  <button onClick={() => addNotification(`Conectando a ${table.nombre}...`)} className="bg-[#3B2063] hover:bg-[#4A297C] text-white text-[10px] font-bold tracking-widest uppercase px-4 py-1.5 rounded-lg transition-colors shadow">
+                  <button onClick={() => notificar({ mensaje: `Conectando a ${table.nombre}...`, tipo: "info", enBandeja: false })} className="bg-[#3B2063] hover:bg-[#4A297C] text-white text-[10px] font-bold tracking-widest uppercase px-4 py-1.5 rounded-lg transition-colors shadow">
                     Unirse
                   </button>
                 </div>

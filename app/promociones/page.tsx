@@ -8,7 +8,7 @@ import {
   ChevronRight, Gem, Coins, RefreshCw
 } from "lucide-react";
 import { ApiError, api } from "@/lib/api";
-import type { Promocion } from "@/lib/api";
+import type { Promocion, Torneo } from "@/lib/api";
 import { useAuthStore } from "@/lib/authStore";
 import { useBalanceStore } from "@/lib/balanceStore";
 import { useNotificationStore } from "@/lib/notificationStore";
@@ -54,6 +54,25 @@ const estiloDe = (tipo: string) => ESTILO_POR_TIPO[tipo] ?? ESTILO_POR_TIPO.bono
 const currency = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", maximumFractionDigits: 0 });
 
 /**
+ * A qué torneo apunta una promoción de tipo `torneo`.
+ *
+ * La tabla `promociones` no guarda un `torneo_id`: son dos catálogos distintos
+ * que la siembra deja con el mismo nombre (`Torneo Rey de Oro`). Se emparejan
+ * por ahí, sin acentos ni mayúsculas, y si no hay pareja el botón lleva a la
+ * lista de torneos igual —que es lo que la persona esperaba— en vez de fallar.
+ */
+const mismoNombre = (a: string, b: string) =>
+  a.trim().localeCompare(b.trim(), "es", { sensitivity: "base" }) === 0;
+
+function torneoDeLaPromocion(promo: Promocion, torneos: Torneo[]): Torneo | null {
+  return (
+    torneos.find((torneo) => mismoNombre(torneo.nombre, promo.titulo)) ??
+    torneos.find((torneo) => promo.titulo.toLowerCase().includes(torneo.nombre.toLowerCase())) ??
+    null
+  );
+}
+
+/**
  * Lo que de verdad pasó al reclamar, en una frase.
  *
  * Un bono de depósito **no acredita nada** al reclamarlo: queda pendiente hasta
@@ -80,10 +99,11 @@ function estadoDelReclamo(promo: Promocion): string | null {
 export default function PromocionesPage() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { addNotification } = useNotificationStore();
+  const notificar = useNotificationStore((s) => s.notificar);
   const aplicarBilletera = useBalanceStore((s) => s.aplicarBilletera);
 
   const [promociones, setPromociones] = useState<Promocion[]>([]);
+  const [torneos, setTorneos] = useState<Torneo[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reclamando, setReclamando] = useState<string | null>(null);
@@ -95,6 +115,19 @@ export default function PromocionesPage() {
       const { promociones: filas } = await api.promociones.listar();
       setPromociones(filas);
       setError(null);
+
+      // Una promoción de torneo no se reclama: se compite. Para poder decir en
+      // la tarjeta si ya estás inscrito hace falta el torneo, que vive en otro
+      // catálogo; se pide solo cuando hay alguna promoción que lo necesite, y si
+      // falla la tarjeta sigue funcionando sin el detalle de la inscripción.
+      if (filas.some((promo) => promo.tipo === "torneo")) {
+        try {
+          const { torneos: filasDeTorneos } = await api.torneos.listar();
+          setTorneos(filasDeTorneos);
+        } catch {
+          setTorneos([]);
+        }
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "No se pudieron cargar las promociones");
     } finally {
@@ -106,6 +139,25 @@ export default function PromocionesPage() {
     if (!user) return;
     void cargar();
   }, [user, cargar]);
+
+  /**
+   * Ir al torneo.
+   *
+   * El botón de una promoción de tipo `torneo` decía "Ver torneo" pero llamaba a
+   * `POST /promociones/:id/reclamo`, y el backend contesta ahí un 422 —"esta
+   * promoción no acredita saldo: se participa inscribiéndose en el torneo"—
+   * estuvieras inscrito o no. Se pintaba como error de la persona algo que era
+   * un enlace mal cableado: nunca hubo nada que reclamar.
+   */
+  const irAlTorneo = (promo: Promocion) => {
+    if (!user) {
+      router.push("/login");
+      return;
+    }
+
+    const torneo = torneoDeLaPromocion(promo, torneos);
+    router.push(torneo ? `/torneos?torneo=${encodeURIComponent(torneo.codigo)}` : "/torneos");
+  };
 
   /**
    * Reclamar.
@@ -121,6 +173,12 @@ export default function PromocionesPage() {
       return;
     }
 
+    // Los torneos no pasan por reclamo: es la otra puerta de esta pantalla.
+    if (promo.tipo === "torneo") {
+      irAlTorneo(promo);
+      return;
+    }
+
     if (promo.reclamo || reclamando) return;
 
     setReclamando(promo.id);
@@ -132,16 +190,21 @@ export default function PromocionesPage() {
       // Si acreditó saldo, la billetera vuelve ya actualizada.
       if (respuesta.billetera) aplicarBilletera(respuesta.billetera);
 
-      addNotification(respuesta.mensaje);
-
-      if ("Notification" in window && Notification.permission === "granted") {
-        new Notification(promo.titulo, { body: respuesta.mensaje, icon: "/fondo.png" });
-      }
+      // Aviso con la piel del casino, no el globo del sistema operativo: aquel
+      // solo salía con el permiso de notificaciones concedido, así que el
+      // resultado del reclamo era invisible para quien lo había negado.
+      notificar({
+        titulo: promo.titulo,
+        mensaje: respuesta.mensaje,
+        tipo: respuesta.billetera ? "exito" : "info",
+      });
 
       await cargar();
     } catch (err) {
       // El 422 del cashback sin pérdidas llega aquí con su explicación escrita.
-      setError(err instanceof ApiError ? err.message : "No se pudo reclamar la promoción");
+      const detalle = err instanceof ApiError ? err.message : "No se pudo reclamar la promoción";
+      setError(detalle);
+      notificar({ titulo: promo.titulo, mensaje: detalle, tipo: "error" });
     } finally {
       setReclamando(null);
     }
@@ -173,10 +236,20 @@ export default function PromocionesPage() {
             <div className="flex items-center gap-4">
               <button
                 onClick={() => destacada && void handleClaim(destacada)}
-                disabled={!destacada || Boolean(destacada.reclamo) || reclamando === destacada?.id}
+                disabled={
+                  !destacada ||
+                  (destacada.tipo !== "torneo" &&
+                    (Boolean(destacada.reclamo) || reclamando === destacada.id))
+                }
                 className="bg-gradient-to-r from-[#D4AF37] to-[#F3D55B] hover:from-[#F3D55B] hover:to-[#FFF1A0] text-black font-black py-3.5 px-8 rounded-xl transition-all shadow-[0_5px_20px_rgba(212,175,55,0.3)] tracking-widest uppercase text-sm disabled:opacity-50 disabled:grayscale disabled:cursor-not-allowed"
               >
-                {destacada?.reclamo ? "BONO ACTIVADO" : reclamando === destacada?.id ? "RECLAMANDO…" : "RECLAMAR AHORA"}
+                {destacada?.tipo === "torneo"
+                  ? "VER TORNEO"
+                  : destacada?.reclamo
+                    ? "BONO ACTIVADO"
+                    : reclamando === destacada?.id
+                      ? "RECLAMANDO…"
+                      : "RECLAMAR AHORA"}
               </button>
               <button
                 onClick={() => destacada && setSelectedTerms(destacada)}
@@ -225,6 +298,9 @@ export default function PromocionesPage() {
           {promociones.map((promo) => {
             const estilo = estiloDe(promo.tipo);
             const PromoIcon = estilo.icon;
+            const esTorneo = promo.tipo === "torneo";
+            const torneo = esTorneo ? torneoDeLaPromocion(promo, torneos) : null;
+            const inscripcion = torneo?.inscripcion ?? null;
             const isClaimed = Boolean(promo.reclamo);
             const detalle = estadoDelReclamo(promo);
 
@@ -259,25 +335,49 @@ export default function PromocionesPage() {
                     <p className="text-[11px] text-[#8A2BE2] mb-4 leading-relaxed">{detalle}</p>
                   )}
 
+                  {/* En un torneo el estado no es "reclamado": es si estás
+                      inscrito y cuántos puntos llevas. Sale del torneo, que es
+                      quien lo sabe, y no del reclamo de la promoción. */}
+                  {esTorneo && inscripcion && (
+                    <p className="text-[11px] text-[#8A2BE2] mb-4 leading-relaxed">
+                      Ya estás inscrito · {inscripcion.puntos} punto
+                      {inscripcion.puntos === 1 ? "" : "s"} acumulado
+                      {inscripcion.puntos === 1 ? "" : "s"} con {currency.format(inscripcion.apostado_mxn)} apostados.
+                    </p>
+                  )}
+
+                  {esTorneo && torneo && !inscripcion && (
+                    <p className="text-[11px] text-gray-400 mb-4 leading-relaxed">
+                      No acredita saldo: se participa inscribiéndose. Los puntos salen de tus apuestas resueltas.
+                    </p>
+                  )}
+
                   <div className="flex items-center gap-2 text-xs text-gray-500 mb-6">
                     <Clock size={14} />
                     <span>{promo.vigencia_texto}</span>
                   </div>
 
                   <div className="flex items-center gap-3 mt-auto pt-4 border-t border-white/5">
+                    {/* El torneo es una navegación, no un reclamo: su botón
+                        nunca se deshabilita por "ya reclamado" —no hay reclamo
+                        posible— y lleva a la clasificación estés inscrito o no. */}
                     <button
-                      onClick={() => void handleClaim(promo)}
-                      disabled={isClaimed || reclamando === promo.id || !promo.vigente}
+                      onClick={() => (esTorneo ? irAlTorneo(promo) : void handleClaim(promo))}
+                      disabled={!esTorneo && (isClaimed || reclamando === promo.id || !promo.vigente)}
                       className={`flex-1 font-bold py-2.5 rounded-lg transition-colors text-xs uppercase tracking-widest ${
-                        isClaimed
-                          ? "bg-[#1E1133] text-[#8A2BE2] border border-[#8A2BE2]/30 cursor-not-allowed"
-                          : "bg-white/5 border border-white/10 hover:bg-white/10 text-white disabled:opacity-40"
+                        esTorneo
+                          ? "bg-[#3B2063] hover:bg-[#4A297C] text-white border border-[#8A2BE2]/30"
+                          : isClaimed
+                            ? "bg-[#1E1133] text-[#8A2BE2] border border-[#8A2BE2]/30 cursor-not-allowed"
+                            : "bg-white/5 border border-white/10 hover:bg-white/10 text-white disabled:opacity-40"
                       }`}
                     >
-                      {isClaimed
-                        ? promo.reclamo?.estado === "pendiente" ? "Pendiente" : "Activado"
-                        : reclamando === promo.id ? "Reclamando…"
-                        : promo.tipo === "torneo" ? "Ver torneo" : "Reclamar"}
+                      {esTorneo
+                        ? inscripcion ? "Ver clasificación" : "Ver torneo"
+                        : isClaimed
+                          ? promo.reclamo?.estado === "pendiente" ? "Pendiente" : "Activado"
+                          : reclamando === promo.id ? "Reclamando…"
+                          : "Reclamar"}
                     </button>
                     <button
                       onClick={() => setSelectedTerms(promo)}

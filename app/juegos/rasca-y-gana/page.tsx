@@ -68,7 +68,7 @@ export default function RascaYGanaPage() {
   const router = useRouter();
   const { user, resolviendo } = useSesionRequerida();
   const saldo = useBalanceStore((s) => s.saldo);
-  const { addNotification } = useNotificationStore(); // <-- Integración de notificaciones globales
+  const notificar = useNotificationStore((s) => s.notificar); // avisos flotantes + campana
 
   const [activeCategory, setActiveCategory] = useState("Todos");
   const [sortBy, setSortBy] = useState(SORT_OPTIONS[0]);
@@ -236,15 +236,16 @@ export default function RascaYGanaPage() {
       if (winAmount > 0) {
         void registrarProgreso(Math.round(winAmount), { boleto: activeTicket.id, cantidad: quantity });
 
-        // <-- Llamada a la notificación global del Navbar -->
-        addNotification(`¡Felicidades! Ganaste ${currency.format(winAmount)} en el boleto ${activeTicket.name}.`);
-
-        // <-- Notificación nativa del sistema operativo -->
-        if ("Notification" in window && Notification.permission === "granted") {
-          new Notification("¡Premio Rasca y Gana!", {
-            body: `Felicidades, ganaste ${currency.format(winAmount)} con el boleto ${activeTicket.name}.`,
-          });
-        }
+        // Aviso con la piel del casino (flotante + campana). Antes esto también
+        // lanzaba un `new Notification()` del sistema operativo, que solo se veía
+        // con el permiso de notificaciones ya concedido en otra sala: quien lo
+        // negó no recibía nada, y quien lo concedió veía un globo gris del
+        // navegador en mitad de un premio.
+        notificar({
+          titulo: "¡Premio Rasca y Gana!",
+          mensaje: `¡Felicidades! Ganaste ${currency.format(winAmount)} en el boleto ${activeTicket.name}.`,
+          tipo: "exito",
+        });
       }
     }, 500);
   };
@@ -261,8 +262,15 @@ export default function RascaYGanaPage() {
   const playTicket = async () => {
     const totalCost = activeTicket.price * quantity;
 
+    // `alert()` congelaba la sala entera hasta que alguien pulsara "Aceptar", con
+    // el estilo del navegador y sin relación con la mesa. El aviso flotante dice
+    // lo mismo sin bloquear y con el diseño del casino.
     if (saldo < totalCost) {
-      alert("Saldo insuficiente para comprar este boleto.");
+      notificar({
+        titulo: "Saldo insuficiente",
+        mensaje: `Este boleto cuesta ${currency.format(totalCost)} y tu saldo es de ${currency.format(saldo)}. Recarga en el cajero para seguir jugando.`,
+        tipo: "aviso",
+      });
       return;
     }
 
